@@ -42,7 +42,7 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:installLocation="auto"
-        android:theme="@style/AppTheme">
+        android:theme="@style/HudTheme">
         <provider
             android:name=".PosterContentProvider"
             android:authorities="poster.${applicationId}"
