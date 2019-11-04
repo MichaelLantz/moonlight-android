@@ -1,6 +1,6 @@
 package com.limelight;
 
-import android.app.Activity;
+import com.vuzix.hud.actionmenu.ActionMenuActivity;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -21,7 +21,7 @@ import com.limelight.utils.UiHelper;
 import java.util.ArrayList;
 import java.util.UUID;
 
-public class ShortcutTrampoline extends Activity {
+public class ShortcutTrampoline extends ActionMenuActivity {
     private String uuidString;
     private NvApp app;
     private ArrayList<Intent> intentStack = new ArrayList<>();

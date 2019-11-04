@@ -28,7 +28,7 @@ import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.UiHelper;
 
-import android.app.Activity;
+import com.vuzix.hud.actionmenu.ActionMenuActivity;
 import android.app.ActivityManager;
 import android.app.Service;
 import android.content.ComponentName;
@@ -59,7 +59,7 @@ import org.xmlpull.v1.XmlPullParserException;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
-public class PcView extends Activity implements AdapterFragmentCallbacks {
+public class PcView extends ActionMenuActivity implements AdapterFragmentCallbacks {
     private RelativeLayout noPcFoundLayout;
     private PcGridAdapter pcGridAdapter;
     private ShortcutHelper shortcutHelper;

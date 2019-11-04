@@ -33,7 +33,7 @@ import com.limelight.utils.UiHelper;
 
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
-import android.app.Activity;
+import com.vuzix.hud.actionmenu.ActionMenuActivity;
 import android.app.PictureInPictureParams;
 import android.app.Service;
 import android.content.ComponentName;
@@ -78,7 +78,7 @@ import java.security.cert.X509Certificate;
 import java.util.Locale;
 
 
-public class Game extends Activity implements SurfaceHolder.Callback,
+public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
     OnGenericMotionListener, OnTouchListener, NvConnectionListener, EvdevListener,
     OnSystemUiVisibilityChangeListener, GameGestures, StreamView.InputCallbacks,
     PerfOverlayListener

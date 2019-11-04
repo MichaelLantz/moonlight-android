@@ -1,6 +1,6 @@
 package com.limelight;
 
-import android.app.Activity;
+import com.vuzix.hud.actionmenu.ActionMenuActivity;
 import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.webkit.WebView;
@@ -8,7 +8,7 @@ import android.webkit.WebViewClient;
 
 import com.limelight.utils.SpinnerDialog;
 
-public class HelpActivity extends Activity {
+public class HelpActivity extends ActionMenuActivity {
 
     private SpinnerDialog loadingDialog;
     private WebView webView;

@@ -5,7 +5,7 @@ import android.content.SharedPreferences;
 import android.media.MediaCodecInfo;
 import android.os.Build;
 import android.os.Bundle;
-import android.app.Activity;
+import com.vuzix.hud.actionmenu.ActionMenuActivity;
 import android.os.Handler;
 import android.preference.ListPreference;
 import android.preference.Preference;
@@ -25,7 +25,7 @@ import com.limelight.R;
 import com.limelight.binding.video.MediaCodecHelper;
 import com.limelight.utils.UiHelper;
 
-public class StreamSettings extends Activity {
+public class StreamSettings extends ActionMenuActivity {
     private PreferenceConfiguration previousPrefs;
 
     void reloadSettings() {

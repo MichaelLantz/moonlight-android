@@ -21,7 +21,7 @@ import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
 import com.limelight.utils.UiHelper;
 
-import android.app.Activity;
+import com.vuzix.hud.actionmenu.ActionMenuActivity;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -47,7 +47,7 @@ import android.widget.AdapterView.AdapterContextMenuInfo;
 
 import org.xmlpull.v1.XmlPullParserException;
 
-public class AppView extends Activity implements AdapterFragmentCallbacks {
+public class AppView extends ActionMenuActivity implements AdapterFragmentCallbacks {
     private AppGridAdapter appGridAdapter;
     private String uuidString;
     private ShortcutHelper shortcutHelper;
