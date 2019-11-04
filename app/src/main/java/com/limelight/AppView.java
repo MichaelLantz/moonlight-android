@@ -32,11 +32,9 @@ import android.graphics.drawable.BitmapDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
-import android.view.ContextMenu;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
-import android.view.ContextMenu.ContextMenuInfo;
 import android.widget.AbsListView;
 import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemClickListener;
@@ -48,6 +46,8 @@ import android.widget.AdapterView.AdapterContextMenuInfo;
 import org.xmlpull.v1.XmlPullParserException;
 
 public class AppView extends ActionMenuActivity implements AdapterFragmentCallbacks {
+    // TODO: find a better way to implement menu handling
+    private int menuPosition = 0;
     private AppGridAdapter appGridAdapter;
     private String uuidString;
     private ShortcutHelper shortcutHelper;
@@ -353,11 +353,10 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
     }
 
     @Override
-    public void onCreateContextMenu(ContextMenu menu, View v, ContextMenuInfo menuInfo) {
-        super.onCreateContextMenu(menu, v, menuInfo);
-        
-        AdapterContextMenuInfo info = (AdapterContextMenuInfo) menuInfo;
-        AppObject selectedApp = (AppObject) appGridAdapter.getItem(info.position);
+    public boolean onCreateActionMenu(Menu menu) {
+        super.onCreateActionMenu(menu);
+
+        AppObject selectedApp = (AppObject) appGridAdapter.getItem(menuPosition);
         if (lastRunningAppId != 0) {
             if (lastRunningAppId == selectedApp.app.getAppId()) {
                 menu.add(Menu.NONE, START_OR_RESUME_ID, 1, getResources().getString(R.string.applist_menu_resume));
@@ -373,7 +372,7 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             // Only add an option to create shortcut if box art is loaded
             // and when we're in grid-mode (not list-mode).
-            ImageView appImageView = info.targetView.findViewById(R.id.grid_image);
+            ImageView appImageView = null; //= info.targetView.findViewById(R.id.grid_image);
             if (appImageView != null) {
                 // We have a grid ImageView, so we must be in grid-mode
                 BitmapDrawable drawable = (BitmapDrawable)appImageView.getDrawable();
@@ -383,16 +382,17 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
                 }
             }
         }
+        return true;
     }
-
+/*
     @Override
-    public void onContextMenuClosed(Menu menu) {
+    public void onActionMenuClosed(Menu menu) {
     }
-
+*/
     @Override
-    public boolean onContextItemSelected(MenuItem item) {
+    public boolean onActionItemSelected(MenuItem item) {
         AdapterContextMenuInfo info = (AdapterContextMenuInfo) item.getMenuInfo();
-        final AppObject app = (AppObject) appGridAdapter.getItem(info.position);
+        final AppObject app = (AppObject) appGridAdapter.getItem(menuPosition);
         switch (item.getItemId()) {
             case START_WITH_QUIT:
                 // Display a confirmation dialog first
@@ -447,7 +447,7 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
                 return true;
 
             default:
-                return super.onContextItemSelected(item);
+                return super.onActionItemSelected(item);
         }
     }
 
@@ -575,14 +575,16 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
 
                 // Only open the context menu if something is running, otherwise start it
                 if (lastRunningAppId != 0) {
-                    openContextMenu(arg1);
+                    menuPosition = pos;
+                    invalidateActionMenu();
+                    openActionMenu();
                 } else {
                     ServerHelper.doStart(AppView.this, app.app, computer, managerBinder);
                 }
             }
         });
         UiHelper.applyStatusBarPadding(listView);
-        registerForContextMenu(listView);
+        //registerForActionMenu(listView);
         listView.requestFocus();
     }
 

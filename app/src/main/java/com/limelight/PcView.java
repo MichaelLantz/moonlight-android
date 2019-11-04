@@ -40,11 +40,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.preference.PreferenceManager;
-import android.view.ContextMenu;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
-import android.view.ContextMenu.ContextMenuInfo;
 import android.view.View.OnClickListener;
 import android.widget.AbsListView;
 import android.widget.AdapterView;
@@ -60,6 +58,8 @@ import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
 public class PcView extends ActionMenuActivity implements AdapterFragmentCallbacks {
+    // TODO: find a better way to implement menu handling
+    private int menuPosition = 0;
     private RelativeLayout noPcFoundLayout;
     private PcGridAdapter pcGridAdapter;
     private ShortcutHelper shortcutHelper;
@@ -307,14 +307,13 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
     }
 
     @Override
-    public void onCreateContextMenu(ContextMenu menu, View v, ContextMenuInfo menuInfo) {
+    public boolean onCreateActionMenu(Menu menu) {
         stopComputerUpdates(false);
 
         // Call superclass
-        super.onCreateContextMenu(menu, v, menuInfo);
-                
-        AdapterContextMenuInfo info = (AdapterContextMenuInfo) menuInfo;
-        ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(info.position);
+        super.onCreateActionMenu(menu);
+
+        ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(menuPosition);
 
         // Inflate the context menu
         if (computer.details.state == ComputerDetails.State.OFFLINE ||
@@ -339,16 +338,18 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
             menu.add(Menu.NONE, DELETE_ID, 4, getResources().getString(R.string.pcview_menu_delete_pc));
         }
         menu.add(Menu.NONE, VIEW_DETAILS_ID, 5,  getResources().getString(R.string.pcview_menu_details));
+        return true;
     }
 
+/*
     @Override
-    public void onContextMenuClosed(Menu menu) {
+    public void onActionMenuClosed(Menu menu) {
         // For some reason, this gets called again _after_ onPause() is called on this activity.
         // startComputerUpdates() manages this and won't actual start polling until the activity
         // returns to the foreground.
         startComputerUpdates();
     }
-
+*/
     private void doPair(final ComputerDetails computer) {
         if (computer.state == ComputerDetails.State.OFFLINE ||
                 ServerHelper.getCurrentAddressFromComputer(computer) == null) {
@@ -559,9 +560,9 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
     }
 
     @Override
-    public boolean onContextItemSelected(MenuItem item) {
+    public boolean onActionItemSelected(MenuItem item) {
         AdapterContextMenuInfo info = (AdapterContextMenuInfo) item.getMenuInfo();
-        final ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(info.position);
+        final ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(menuPosition);
         switch (item.getItemId()) {
             case PAIR_ID:
                 doPair(computer.details);
@@ -626,7 +627,7 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
                 return true;
 
             default:
-                return super.onContextItemSelected(item);
+                return super.onActionItemSelected(item);
         }
     }
     
@@ -708,7 +709,9 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
                 if (computer.details.state == ComputerDetails.State.UNKNOWN ||
                     computer.details.state == ComputerDetails.State.OFFLINE) {
                     // Open the context menu if a PC is offline or refreshing
-                    openContextMenu(arg1);
+                    menuPosition = pos;
+                    invalidateActionMenu();
+                    openActionMenu();
                 } else if (computer.details.pairState != PairState.PAIRED) {
                     // Pair an unpaired machine by default
                     doPair(computer.details);
@@ -718,7 +721,7 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
             }
         });
         UiHelper.applyStatusBarPadding(listView);
-        registerForContextMenu(listView);
+        //registerForActionMenu(listView);
     }
 
     public class ComputerObject {

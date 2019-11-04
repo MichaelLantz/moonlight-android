@@ -19,7 +19,7 @@ import com.limelight.utils.Dialog;
 import com.limelight.utils.SpinnerDialog;
 import com.limelight.utils.UiHelper;
 
-import com.vuzix.hud.actionmenu.ActionMenuActivity;
+import android.app.Activity;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Context;
@@ -34,7 +34,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.TextView;
 import android.widget.Toast;
 
-public class AddComputerManually extends ActionMenuActivity {
+public class AddComputerManually extends Activity {
     private TextView hostText;
     private ComputerManagerService.ComputerManagerBinder managerBinder;
     private final LinkedBlockingQueue<String> computersToAdd = new LinkedBlockingQueue<>();
