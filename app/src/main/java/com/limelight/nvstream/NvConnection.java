@@ -121,13 +121,11 @@ public class NvConnection {
             // Lower resolution to 1080p
             context.negotiatedWidth = 1920;
             context.negotiatedHeight = 1080;
-            context.negotiatedFps = context.streamConfig.getRefreshRate();
         }
         else {
             // Take what the client wanted
             context.negotiatedWidth = context.streamConfig.getWidth();
             context.negotiatedHeight = context.streamConfig.getHeight();
-            context.negotiatedFps = context.streamConfig.getRefreshRate();
         }
         
         //
@@ -236,6 +234,10 @@ public class NvConnection {
                         return;
                     }
                     context.connListener.stageComplete(appName);
+                } catch (GfeHttpResponseException e) {
+                    e.printStackTrace();
+                    context.connListener.displayMessage(e.getMessage());
+                    context.connListener.stageFailed(appName, e.getErrorCode());
                 } catch (XmlPullParserException | IOException e) {
                     e.printStackTrace();
                     context.connListener.displayMessage(e.getMessage());
@@ -263,9 +265,9 @@ public class NvConnection {
                     int ret = MoonBridge.startConnection(context.serverAddress,
                             context.serverAppVersion, context.serverGfeVersion,
                             context.negotiatedWidth, context.negotiatedHeight,
-                            context.negotiatedFps, context.streamConfig.getBitrate(),
+                            context.streamConfig.getRefreshRate(), context.streamConfig.getBitrate(),
                             context.streamConfig.getMaxPacketSize(),
-                            context.streamConfig.getRemote(), context.streamConfig.getAudioConfiguration(),
+                            context.streamConfig.getRemote(), context.streamConfig.getAudioConfiguration().toInt(),
                             context.streamConfig.getHevcSupported(),
                             context.negotiatedHdr,
                             context.streamConfig.getHevcBitratePercentageMultiplier(),
@@ -287,6 +289,13 @@ public class NvConnection {
     {
         if (!isMonkey) {
             MoonBridge.sendMouseMove(deltaX, deltaY);
+        }
+    }
+
+    public void sendMousePosition(short x, short y, short referenceWidth, short referenceHeight)
+    {
+        if (!isMonkey) {
+            MoonBridge.sendMousePosition(x, y, referenceWidth, referenceHeight);
         }
     }
     
@@ -336,6 +345,12 @@ public class NvConnection {
     public void sendMouseScroll(final byte scrollClicks) {
         if (!isMonkey) {
             MoonBridge.sendMouseScroll(scrollClicks);
+        }
+    }
+
+    public void sendMouseHighResScroll(final short scrollAmount) {
+        if (!isMonkey) {
+            MoonBridge.sendMouseHighResScroll(scrollAmount);
         }
     }
 

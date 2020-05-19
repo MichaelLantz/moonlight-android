@@ -6,9 +6,11 @@ import com.limelight.binding.input.ControllerHandler;
 import com.limelight.binding.input.KeyboardTranslator;
 import com.limelight.binding.input.capture.InputCaptureManager;
 import com.limelight.binding.input.capture.InputCaptureProvider;
-import com.limelight.binding.input.TouchContext;
+import com.limelight.binding.input.touch.AbsoluteTouchContext;
+import com.limelight.binding.input.touch.RelativeTouchContext;
 import com.limelight.binding.input.driver.UsbDriverService;
 import com.limelight.binding.input.evdev.EvdevListener;
+import com.limelight.binding.input.touch.TouchContext;
 import com.limelight.binding.input.virtual_controller.VirtualController;
 import com.limelight.binding.video.CrashListener;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
@@ -27,6 +29,7 @@ import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamView;
 import com.limelight.utils.Dialog;
+import com.limelight.utils.NetHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
 import com.limelight.utils.UiHelper;
@@ -42,6 +45,7 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Point;
 import android.graphics.Rect;
@@ -72,6 +76,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.ByteArrayInputStream;
+import java.lang.reflect.Field;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
@@ -83,8 +88,6 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
     OnSystemUiVisibilityChangeListener, GameGestures, StreamView.InputCallbacks,
     PerfOverlayListener
 {
-    private int lastMouseX = Integer.MIN_VALUE;
-    private int lastMouseY = Integer.MIN_VALUE;
     private int lastButtonState = 0;
 
     // Only 2 touches are supported
@@ -93,6 +96,12 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
 
     private static final int REFERENCE_HORIZ_RES = 1280;
     private static final int REFERENCE_VERT_RES = 720;
+
+    private static final int STYLUS_DOWN_DEAD_ZONE_DELAY = 100;
+    private static final int STYLUS_DOWN_DEAD_ZONE_RADIUS = 20;
+
+    private static final int STYLUS_UP_DEAD_ZONE_DELAY = 150;
+    private static final int STYLUS_UP_DEAD_ZONE_RADIUS = 50;
 
     private static final int THREE_FINGER_TAP_THRESHOLD = 300;
 
@@ -115,6 +124,10 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
     private boolean grabbedInput = true;
     private boolean grabComboDown = false;
     private StreamView streamView;
+    private long lastAbsTouchUpTime = 0;
+    private long lastAbsTouchDownTime = 0;
+    private float lastAbsTouchUpX, lastAbsTouchUpY;
+    private float lastAbsTouchDownX, lastAbsTouchDownY;
 
     private boolean isHidingOverlays;
     private TextView notificationOverlayView;
@@ -225,7 +238,7 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
             streamView.setOnCapturedPointerListener(new View.OnCapturedPointerListener() {
                 @Override
                 public boolean onCapturedPointer(View view, MotionEvent motionEvent) {
-                    return handleMotionEvent(motionEvent);
+                    return handleMotionEvent(view, motionEvent);
                 }
             });
         }
@@ -397,6 +410,7 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
         // Hopefully, we can get rid of this once someone comes up with a better way
         // to track the state of the pipeline and time frames.
         int roundedRefreshRate = Math.round(displayRefreshRate);
+        int chosenFrameRate = prefConfig.fps;
         if (!prefConfig.disableFrameDrop || prefConfig.unlockFps) {
             if (Build.DEVICE.equals("coral") || Build.DEVICE.equals("flame")) {
                 // HACK: Pixel 4 (XL) ignores the preferred display mode and lowers refresh rate,
@@ -422,29 +436,35 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
                     // Use the old rendering strategy on these broken devices
                     decoderRenderer.enableLegacyFrameDropRendering();
                 } else {
-                    prefConfig.fps = roundedRefreshRate - 1;
-                    LimeLog.info("Adjusting FPS target for screen to " + prefConfig.fps);
+                    chosenFrameRate = roundedRefreshRate - 1;
+                    LimeLog.info("Adjusting FPS target for screen to " + chosenFrameRate);
                 }
             }
         }
 
+        boolean vpnActive = NetHelper.isActiveNetworkVpn(this);
+        if (vpnActive) {
+            LimeLog.info("Detected active network is a VPN");
+        }
+
         StreamConfiguration config = new StreamConfiguration.Builder()
                 .setResolution(prefConfig.width, prefConfig.height)
-                .setRefreshRate(prefConfig.fps)
+                .setLaunchRefreshRate(prefConfig.fps)
+                .setRefreshRate(chosenFrameRate)
                 .setApp(new NvApp(appName != null ? appName : "app", appId, willStreamHdr))
                 .setBitrate(prefConfig.bitrate)
                 .setEnableSops(prefConfig.enableSops)
                 .enableLocalAudioPlayback(prefConfig.playHostAudio)
-                .setMaxPacketSize(1392)
-                .setRemoteConfiguration(StreamConfiguration.STREAM_CFG_AUTO)
+                .setMaxPacketSize(vpnActive ? 1024 : 1392) // Lower MTU on VPN
+                .setRemoteConfiguration(vpnActive ? // Use remote optimizations on VPN
+                        StreamConfiguration.STREAM_CFG_REMOTE :
+                        StreamConfiguration.STREAM_CFG_AUTO)
                 .setHevcBitratePercentageMultiplier(75)
                 .setHevcSupported(decoderRenderer.isHevcSupported())
                 .setEnableHdr(willStreamHdr)
                 .setAttachedGamepadMask(gamepadMask)
                 .setClientRefreshRateX100((int)(displayRefreshRate * 100))
-                .setAudioConfiguration(prefConfig.enable51Surround ?
-                        MoonBridge.AUDIO_CONFIGURATION_51_SURROUND :
-                        MoonBridge.AUDIO_CONFIGURATION_STEREO)
+                .setAudioConfiguration(prefConfig.audioConfiguration)
                 .build();
 
         // Initialize the connection
@@ -456,9 +476,14 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
 
         // Initialize touch contexts
         for (int i = 0; i < touchContextMap.length; i++) {
-            touchContextMap[i] = new TouchContext(conn, i,
-                    REFERENCE_HORIZ_RES, REFERENCE_VERT_RES,
-                    streamView);
+            if (!prefConfig.touchscreenTrackpad) {
+                touchContextMap[i] = new AbsoluteTouchContext(conn, i, streamView);
+            }
+            else {
+                touchContextMap[i] = new RelativeTouchContext(conn, i,
+                        REFERENCE_HORIZ_RES, REFERENCE_VERT_RES,
+                        streamView);
+            }
         }
 
         // Use sustained performance mode on N+ to ensure consistent
@@ -584,6 +609,29 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
         }
     }
 
+    // FIXME: Remove when Android R SDK is finalized
+    private static void setPreferMinimalPostProcessingWithReflection(WindowManager.LayoutParams windowLayoutParams, boolean isPreferred) {
+        // Build.VERSION.PREVIEW_SDK_INT was added in M
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q && Build.VERSION.PREVIEW_SDK_INT == 0) {
+                // Don't attempt this reflection unless on Android R Developer Preview
+                return;
+            }
+        }
+        else {
+            return;
+        }
+
+        try {
+            Field field = windowLayoutParams.getClass().getDeclaredField("preferMinimalPostProcessing");
+            field.set(windowLayoutParams, isPreferred);
+        } catch (NoSuchFieldException e) {
+            e.printStackTrace();
+        } catch (IllegalAccessException e) {
+            e.printStackTrace();
+        }
+    }
+
     private float prepareDisplayForRendering() {
         Display display = getWindowManager().getDefaultDisplay();
         WindowManager.LayoutParams windowLayoutParams = getWindow().getAttributes();
@@ -660,6 +708,9 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
             displayRefreshRate = display.getRefreshRate();
         }
 
+        // Enable HDMI ALLM (game mode) on Android R
+        setPreferMinimalPostProcessingWithReflection(windowLayoutParams, true);
+
         // Apply the display mode change
         getWindow().setAttributes(windowLayoutParams);
 
@@ -694,7 +745,18 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
             streamView.setDesiredAspectRatio((double)prefConfig.width / (double)prefConfig.height);
         }
 
-        return displayRefreshRate;
+        if (getPackageManager().hasSystemFeature(PackageManager.FEATURE_TELEVISION) ||
+                getPackageManager().hasSystemFeature(PackageManager.FEATURE_LEANBACK)) {
+            // TVs may take a few moments to switch refresh rates, and we can probably assume
+            // it will be eventually activated.
+            // TODO: Improve this
+            return displayRefreshRate;
+        }
+        else {
+            // Use the actual refresh rate of the display, since the preferred refresh rate or mode
+            // may not actually be applied (ex: Pixel 4 with Smooth Display disabled).
+            return getWindowManager().getDefaultDisplay().getRefreshRate();
+        }
     }
 
     @SuppressLint("InlinedApi")
@@ -953,11 +1015,19 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
         // Handle a synthetic back button event that some Android OS versions
         // create as a result of a right-click. This event WILL repeat if
         // the right mouse button is held down, so we ignore those.
-        if (!prefConfig.mouseNavButtons &&
-                (event.getSource() == InputDevice.SOURCE_MOUSE ||
+        if ((event.getSource() == InputDevice.SOURCE_MOUSE ||
                 event.getSource() == InputDevice.SOURCE_MOUSE_RELATIVE) &&
                 event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
-            conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT);
+
+            // Send the right mouse button event if mouse back and forward
+            // are disabled. If they are enabled, handleMotionEvent() will take
+            // care of this.
+            if (!prefConfig.mouseNavButtons) {
+                conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT);
+            }
+
+            // Always return true, otherwise the back press will be propagated
+            // up to the parent and finish the activity.
             return true;
         }
 
@@ -978,6 +1048,11 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
 
             // Let this method take duplicate key down events
             if (handleSpecialKeys(event.getKeyCode(), true)) {
+                return true;
+            }
+
+            // Eat repeat down events
+            if (event.getRepeatCount() > 0) {
                 return true;
             }
 
@@ -1011,11 +1086,19 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
 
         // Handle a synthetic back button event that some Android OS versions
         // create as a result of a right-click.
-        if (!prefConfig.mouseNavButtons &&
-                (event.getSource() == InputDevice.SOURCE_MOUSE ||
+        if ((event.getSource() == InputDevice.SOURCE_MOUSE ||
                 event.getSource() == InputDevice.SOURCE_MOUSE_RELATIVE) &&
                 event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
-            conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT);
+
+            // Send the right mouse button event if mouse back and forward
+            // are disabled. If they are enabled, handleMotionEvent() will take
+            // care of this.
+            if (!prefConfig.mouseNavButtons) {
+                conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT);
+            }
+
+            // Always return true, otherwise the back press will be propagated
+            // up to the parent and finish the activity.
             return true;
         }
 
@@ -1073,7 +1156,8 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
     }
 
     // Returns true if the event was consumed
-    private boolean handleMotionEvent(MotionEvent event) {
+    // NB: View is only present if called from a view callback
+    private boolean handleMotionEvent(View view, MotionEvent event) {
         // Pass through keyboard input if we're not grabbing
         if (!grabbedInput) {
             return false;
@@ -1087,30 +1171,44 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
         else if ((event.getSource() & InputDevice.SOURCE_CLASS_POINTER) != 0 ||
                   event.getSource() == InputDevice.SOURCE_MOUSE_RELATIVE)
         {
-            // This case is for mice
+            // This case is for mice and non-finger touch devices
             if (event.getSource() == InputDevice.SOURCE_MOUSE ||
                     event.getSource() == InputDevice.SOURCE_MOUSE_RELATIVE ||
                     (event.getPointerCount() >= 1 &&
-                            event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE))
+                            (event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE ||
+                                    event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS ||
+                                    event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER)))
             {
                 int changedButtons = event.getButtonState() ^ lastButtonState;
 
                 // Ignore mouse input if we're not capturing from our input source
                 if (!inputCaptureProvider.isCapturingActive()) {
-                    return false;
+                    // We return true here because otherwise the events may end up causing
+                    // Android to synthesize d-pad events.
+                    return true;
+                }
+
+                // Always update the position before sending any button events. If we're
+                // dealing with a stylus without hover support, our position might be
+                // significantly different than before.
+                if (inputCaptureProvider.eventHasRelativeMouseAxes(event)) {
+                    // Send the deltas straight from the motion event
+                    short deltaX = (short)inputCaptureProvider.getRelativeAxisX(event);
+                    short deltaY = (short)inputCaptureProvider.getRelativeAxisY(event);
+
+                    if (deltaX != 0 || deltaY != 0) {
+                        conn.sendMouseMove(deltaX, deltaY);
+                    }
+                }
+                else if (view != null) {
+                    // Otherwise send absolute position
+                    updateMousePosition(view, event);
                 }
 
                 if (event.getActionMasked() == MotionEvent.ACTION_SCROLL) {
                     // Send the vertical scroll packet
                     byte vScrollClicks = (byte) event.getAxisValue(MotionEvent.AXIS_VSCROLL);
                     conn.sendMouseScroll(vScrollClicks);
-                }
-                else if (event.getActionMasked() == MotionEvent.ACTION_HOVER_ENTER ||
-                         event.getActionMasked() == MotionEvent.ACTION_HOVER_EXIT) {
-                    // On some devices (Galaxy S8 without Oreo pointer capture), we can
-                    // get spurious ACTION_HOVER_ENTER events when right clicking with
-                    // incorrect X and Y coordinates. Just eat this event without processing it.
-                    return true;
                 }
 
                 if ((changedButtons & MotionEvent.BUTTON_PRIMARY) != 0) {
@@ -1122,8 +1220,9 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
                     }
                 }
 
-                if ((changedButtons & MotionEvent.BUTTON_SECONDARY) != 0) {
-                    if ((event.getButtonState() & MotionEvent.BUTTON_SECONDARY) != 0) {
+                // Mouse secondary or stylus primary is right click (stylus down is left click)
+                if ((changedButtons & (MotionEvent.BUTTON_SECONDARY | MotionEvent.BUTTON_STYLUS_PRIMARY)) != 0) {
+                    if ((event.getButtonState() & (MotionEvent.BUTTON_SECONDARY | MotionEvent.BUTTON_STYLUS_PRIMARY)) != 0) {
                         conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT);
                     }
                     else {
@@ -1131,8 +1230,9 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
                     }
                 }
 
-                if ((changedButtons & MotionEvent.BUTTON_TERTIARY) != 0) {
-                    if ((event.getButtonState() & MotionEvent.BUTTON_TERTIARY) != 0) {
+                // Mouse tertiary or stylus secondary is middle click
+                if ((changedButtons & (MotionEvent.BUTTON_TERTIARY | MotionEvent.BUTTON_STYLUS_SECONDARY)) != 0) {
+                    if ((event.getButtonState() & (MotionEvent.BUTTON_TERTIARY | MotionEvent.BUTTON_STYLUS_SECONDARY)) != 0) {
                         conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_MIDDLE);
                     }
                     else {
@@ -1160,36 +1260,58 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
                     }
                 }
 
-                // Get relative axis values if we can
-                if (inputCaptureProvider.eventHasRelativeMouseAxes(event)) {
-                    // Send the deltas straight from the motion event
-                    conn.sendMouseMove((short) inputCaptureProvider.getRelativeAxisX(event),
-                            (short) inputCaptureProvider.getRelativeAxisY(event));
+                // Handle stylus presses
+                if (event.getPointerCount() == 1 && event.getActionIndex() == 0) {
+                    if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS) {
+                            lastAbsTouchDownTime = SystemClock.uptimeMillis();
+                            lastAbsTouchDownX = event.getX(0);
+                            lastAbsTouchDownY = event.getY(0);
 
-                    // We have to also update the position Android thinks the cursor is at
-                    // in order to avoid jumping when we stop moving or click.
-                    lastMouseX = (int)event.getX();
-                    lastMouseY = (int)event.getY();
-                }
-                else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    // We get a normal (non-relative) MotionEvent when starting pointer capture to synchronize the
-                    // location of the cursor with our app. We don't want this, so we must discard this event.
-                    lastMouseX = (int)event.getX();
-                    lastMouseY = (int)event.getY();
-                }
-                else {
-                    // Don't process the history. We just want the current position now.
-                    updateMousePosition((int)event.getX(), (int)event.getY());
+                            // Stylus is left click
+                            conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT);
+                        } else if (event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER) {
+                            lastAbsTouchDownTime = SystemClock.uptimeMillis();
+                            lastAbsTouchDownX = event.getX(0);
+                            lastAbsTouchDownY = event.getY(0);
+
+                            // Eraser is right click
+                            conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT);
+                        }
+                    }
+                    else if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS) {
+                            lastAbsTouchUpTime = SystemClock.uptimeMillis();
+                            lastAbsTouchUpX = event.getX(0);
+                            lastAbsTouchUpY = event.getY(0);
+
+                            // Stylus is left click
+                            conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT);
+                        } else if (event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER) {
+                            lastAbsTouchUpTime = SystemClock.uptimeMillis();
+                            lastAbsTouchUpX = event.getX(0);
+                            lastAbsTouchUpY = event.getY(0);
+
+                            // Eraser is right click
+                            conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT);
+                        }
+                    }
                 }
 
                 lastButtonState = event.getButtonState();
             }
-            // This case is for touch-based input devices
+            // This case is for fingers
             else
             {
                 if (virtualController != null &&
-                        virtualController.getControllerMode() == VirtualController.ControllerMode.Configuration) {
-                    // Ignore presses when the virtual controller is in configuration mode
+                        (virtualController.getControllerMode() == VirtualController.ControllerMode.MoveButtons ||
+                         virtualController.getControllerMode() == VirtualController.ControllerMode.ResizeButtons)) {
+                    // Ignore presses when the virtual controller is being configured
+                    return true;
+                }
+
+                if (view == null && !prefConfig.touchscreenTrackpad) {
+                    // Absolute touch events should be dropped outside our view.
                     return true;
                 }
 
@@ -1222,7 +1344,10 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
                 {
                 case MotionEvent.ACTION_POINTER_DOWN:
                 case MotionEvent.ACTION_DOWN:
-                    context.touchDownEvent(eventX, eventY);
+                    for (TouchContext touchContext : touchContextMap) {
+                        touchContext.setPointerCount(event.getPointerCount());
+                    }
+                    context.touchDownEvent(eventX, eventY, true);
                     break;
                 case MotionEvent.ACTION_POINTER_UP:
                 case MotionEvent.ACTION_UP:
@@ -1235,9 +1360,12 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
                         }
                     }
                     context.touchUpEvent(eventX, eventY);
+                    for (TouchContext touchContext : touchContextMap) {
+                        touchContext.setPointerCount(event.getPointerCount() - 1);
+                    }
                     if (actionIndex == 0 && event.getPointerCount() > 1 && !context.isCancelled()) {
                         // The original secondary touch now becomes primary
-                        context.touchDownEvent((int)event.getX(1), (int)event.getY(1));
+                        context.touchDownEvent((int)event.getX(1), (int)event.getY(1), false);
                     }
                     break;
                 case MotionEvent.ACTION_MOVE:
@@ -1266,6 +1394,12 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
                         }
                     }
                     break;
+                case MotionEvent.ACTION_CANCEL:
+                    for (TouchContext aTouchContext : touchContextMap) {
+                        aTouchContext.cancelTouch();
+                        aTouchContext.setPointerCount(0);
+                    }
+                    break;
                 default:
                     return false;
                 }
@@ -1281,48 +1415,67 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        return handleMotionEvent(event) || super.onTouchEvent(event);
+        return handleMotionEvent(null, event) || super.onTouchEvent(event);
 
     }
 
     @Override
     public boolean onGenericMotionEvent(MotionEvent event) {
-        return handleMotionEvent(event) || super.onGenericMotionEvent(event);
+        return handleMotionEvent(null, event) || super.onGenericMotionEvent(event);
 
     }
 
-    private void updateMousePosition(int eventX, int eventY) {
-        // Send a mouse move if we already have a mouse location
-        // and the mouse coordinates change
-        if (lastMouseX != Integer.MIN_VALUE &&
-            lastMouseY != Integer.MIN_VALUE &&
-            !(lastMouseX == eventX && lastMouseY == eventY))
+    private void updateMousePosition(View view, MotionEvent event) {
+        // X and Y are already relative to the provided view object
+        float eventX = event.getX(0);
+        float eventY = event.getY(0);
+
+        if (event.getPointerCount() == 1 && event.getActionIndex() == 0 &&
+                (event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER ||
+                event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS))
         {
-            int deltaX = eventX - lastMouseX;
-            int deltaY = eventY - lastMouseY;
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                case MotionEvent.ACTION_HOVER_ENTER:
+                case MotionEvent.ACTION_HOVER_EXIT:
+                case MotionEvent.ACTION_HOVER_MOVE:
+                    if (SystemClock.uptimeMillis() - lastAbsTouchUpTime <= STYLUS_UP_DEAD_ZONE_DELAY &&
+                            Math.sqrt(Math.pow(eventX - lastAbsTouchUpX, 2) + Math.pow(eventY - lastAbsTouchUpY, 2)) <= STYLUS_UP_DEAD_ZONE_RADIUS) {
+                        // Enforce a small deadzone between touch up and hover or touch down to allow more precise double-clicking
+                        return;
+                    }
+                    break;
 
-            // Scale the deltas if the device resolution is different
-            // than the stream resolution
-            deltaX = (int)Math.round((double)deltaX * (REFERENCE_HORIZ_RES / (double)streamView.getWidth()));
-            deltaY = (int)Math.round((double)deltaY * (REFERENCE_VERT_RES / (double)streamView.getHeight()));
-
-            conn.sendMouseMove((short)deltaX, (short)deltaY);
+                case MotionEvent.ACTION_MOVE:
+                case MotionEvent.ACTION_UP:
+                    if (SystemClock.uptimeMillis() - lastAbsTouchDownTime <= STYLUS_DOWN_DEAD_ZONE_DELAY &&
+                            Math.sqrt(Math.pow(eventX - lastAbsTouchDownX, 2) + Math.pow(eventY - lastAbsTouchDownY, 2)) <= STYLUS_DOWN_DEAD_ZONE_RADIUS) {
+                        // Enforce a small deadzone between touch down and move or touch up to allow more precise double-clicking
+                        return;
+                    }
+                    break;
+            }
         }
 
-        // Update pointer location for delta calculation next time
-        lastMouseX = eventX;
-        lastMouseY = eventY;
+        // We may get values slightly outside our view region on ACTION_HOVER_ENTER and ACTION_HOVER_EXIT.
+        // Normalize these to the view size. We can't just drop them because we won't always get an event
+        // right at the boundary of the view, so dropping them would result in our cursor never really
+        // reaching the sides of the screen.
+        eventX = Math.min(Math.max(eventX, 0), view.getWidth());
+        eventY = Math.min(Math.max(eventY, 0), view.getHeight());
+
+        conn.sendMousePosition((short)eventX, (short)eventY, (short)view.getWidth(), (short)view.getHeight());
     }
 
     @Override
-    public boolean onGenericMotion(View v, MotionEvent event) {
-        return handleMotionEvent(event);
+    public boolean onGenericMotion(View view, MotionEvent event) {
+        return handleMotionEvent(view, event);
     }
 
     @SuppressLint("ClickableViewAccessibility")
     @Override
-    public boolean onTouch(View v, MotionEvent event) {
-        return handleMotionEvent(event);
+    public boolean onTouch(View view, MotionEvent event) {
+        return handleMotionEvent(view, event);
     }
 
     @Override
@@ -1361,7 +1514,7 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
     }
 
     @Override
-    public void stageFailed(final String stage, final long errorCode) {
+    public void stageFailed(final String stage, final int errorCode) {
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -1376,18 +1529,18 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
 
                     // If video initialization failed and the surface is still valid, display extra information for the user
                     if (stage.contains("video") && streamView.getHolder().getSurface().isValid()) {
-                        Toast.makeText(Game.this, "Video decoder failed to initialize. Your device may not support the selected resolution.", Toast.LENGTH_LONG).show();
+                        Toast.makeText(Game.this, getResources().getText(R.string.video_decoder_init_failed), Toast.LENGTH_LONG).show();
                     }
 
                     Dialog.displayDialog(Game.this, getResources().getString(R.string.conn_error_title),
-                            getResources().getString(R.string.conn_error_msg) + " " + stage, true);
+                            getResources().getString(R.string.conn_error_msg) + " " + stage +" (error "+errorCode+")", true);
                 }
             }
         });
     }
 
     @Override
-    public void connectionTerminated(final long errorCode) {
+    public void connectionTerminated(final int errorCode) {
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -1404,9 +1557,21 @@ public class Game extends ActionMenuActivity implements SurfaceHolder.Callback,
 
                     // Display the error dialog if it was an unexpected termination.
                     // Otherwise, just finish the activity immediately.
-                    if (errorCode != 0) {
+                    if (errorCode != MoonBridge.ML_ERROR_GRACEFUL_TERMINATION) {
+                        String message;
+
+                        switch (errorCode) {
+                            case MoonBridge.ML_ERROR_NO_VIDEO_TRAFFIC:
+                                message = getResources().getString(R.string.no_video_received_error);
+                                break;
+
+                            default:
+                                message = getResources().getString(R.string.conn_terminated_msg);
+                                break;
+                        }
+
                         Dialog.displayDialog(Game.this, getResources().getString(R.string.conn_terminated_title),
-                                getResources().getString(R.string.conn_terminated_msg), true);
+                                message, true);
                     }
                     else {
                         finish();

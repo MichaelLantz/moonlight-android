@@ -186,9 +186,20 @@ public class NvHTTP {
     }
     
     private static void verifyResponseStatus(XmlPullParser xpp) throws GfeHttpResponseException {
-        int statusCode = Integer.parseInt(xpp.getAttributeValue(XmlPullParser.NO_NAMESPACE, "status_code"));
+        // We use Long.parseLong() because in rare cases GFE can send back a status code of
+        // 0xFFFFFFFF, which will cause Integer.parseInt() to throw a NumberFormatException due
+        // to exceeding Integer.MAX_VALUE. We'll get the desired error code of -1 by just casting
+        // the resulting long into an int.
+        int statusCode = (int)Long.parseLong(xpp.getAttributeValue(XmlPullParser.NO_NAMESPACE, "status_code"));
         if (statusCode != 200) {
-            throw new GfeHttpResponseException(statusCode, xpp.getAttributeValue(XmlPullParser.NO_NAMESPACE, "status_message"));
+            String statusMsg = xpp.getAttributeValue(XmlPullParser.NO_NAMESPACE, "status_message");
+            if (statusCode == -1 && "Invalid".equals(statusMsg)) {
+                // Special case handling an audio capture error which GFE doesn't
+                // provide any useful status message for.
+                statusCode = 418;
+                statusMsg = "Missing audio capture device. Reinstall GeForce Experience.";
+            }
+            throw new GfeHttpResponseException(statusCode, statusMsg);
         }
     }
     
@@ -331,7 +342,7 @@ public class NvHTTP {
             throw new FileNotFoundException(url);
         }
         else {
-            throw new IOException("HTTP request failed: "+response.code());
+            throw new GfeHttpResponseException(response.code(), response.message());
         }
     }
     
@@ -621,11 +632,6 @@ public class NvHTTP {
     }
     
     public boolean launchApp(ConnectionContext context, int appId, boolean enableHdr) throws IOException, XmlPullParserException {
-        // Using an FPS value over 60 causes SOPS to default to 720p60,
-        // so force it to 60 when starting. This won't impact our ability
-        // to get > 60 FPS while actually streaming though.
-        int fps = context.negotiatedFps > 60 ? 60 : context.negotiatedFps;
-
         // Using an unsupported resolution (not 720p, 1080p, or 4K) causes
         // GFE to force SOPS to 720p60. This is fine for < 720p resolutions like
         // 360p or 480p, but it is not ideal for 1440p and other resolutions.
@@ -639,16 +645,26 @@ public class NvHTTP {
             enableSops = false;
         }
 
+        // Using SOPS with FPS values over 60 causes GFE to fall back
+        // to 720p60. On previous GFE versions, we could avoid this by
+        // forcing the FPS value to 60 when launching the stream, but
+        // now on GFE 3.20.3 that seems to trigger some sort of
+        // frame rate limiter that locks the game to 60 FPS.
+        if (context.streamConfig.getLaunchRefreshRate() > 60) {
+            LimeLog.info("Disabling SOPS due to high frame rate: "+context.streamConfig.getLaunchRefreshRate());
+            enableSops = false;
+        }
+
         String xmlStr = openHttpConnectionToString(baseUrlHttps +
             "/launch?" + buildUniqueIdUuidString() +
             "&appid=" + appId +
-            "&mode=" + context.negotiatedWidth + "x" + context.negotiatedHeight + "x" + fps +
+            "&mode=" + context.negotiatedWidth + "x" + context.negotiatedHeight + "x" + context.streamConfig.getLaunchRefreshRate() +
             "&additionalStates=1&sops=" + (enableSops ? 1 : 0) +
             "&rikey="+bytesToHex(context.riKey.getEncoded()) +
             "&rikeyid="+context.riKeyId +
             (!enableHdr ? "" : "&hdrMode=1&clientHdrCapVersion=0&clientHdrCapSupportedFlagsInUint32=0&clientHdrCapMetaDataId=NV_STATIC_METADATA_TYPE_1&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0") +
             "&localAudioPlayMode=" + (context.streamConfig.getPlayLocalAudio() ? 1 : 0) +
-            "&surroundAudioInfo=" + ((context.streamConfig.getAudioChannelMask() << 16) + context.streamConfig.getAudioChannelCount()) +
+            "&surroundAudioInfo=" + context.streamConfig.getAudioConfiguration().getSurroundAudioInfo() +
             (context.streamConfig.getAttachedGamepadMask() != 0 ? "&remoteControllersBitmap=" + context.streamConfig.getAttachedGamepadMask() : "") +
             (context.streamConfig.getAttachedGamepadMask() != 0 ? "&gcmap=" + context.streamConfig.getAttachedGamepadMask() : ""),
             false);
@@ -660,7 +676,7 @@ public class NvHTTP {
         String xmlStr = openHttpConnectionToString(baseUrlHttps + "/resume?" + buildUniqueIdUuidString() +
                 "&rikey="+bytesToHex(context.riKey.getEncoded()) +
                 "&rikeyid="+context.riKeyId +
-                "&surroundAudioInfo=" + ((context.streamConfig.getAudioChannelMask() << 16) + context.streamConfig.getAudioChannelCount()),
+                "&surroundAudioInfo=" + context.streamConfig.getAudioConfiguration().getSurroundAudioInfo(),
                 false);
         String resume = getXmlString(xmlStr, "resume");
         return Integer.parseInt(resume) != 0;

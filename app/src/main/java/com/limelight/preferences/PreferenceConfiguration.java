@@ -6,9 +6,11 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.preference.PreferenceManager;
 
+import com.limelight.nvstream.jni.MoonBridge;
+
 public class PreferenceConfiguration {
     private static final String LEGACY_RES_FPS_PREF_STRING = "list_resolution_fps";
-
+    private static final String LEGACY_ENABLE_51_SURROUND_PREF_STRING = "checkbox_51_surround";
 
     static final String RESOLUTION_PREF_STRING = "list_resolution";
     static final String FPS_PREF_STRING = "list_fps";
@@ -19,11 +21,12 @@ public class PreferenceConfiguration {
     private static final String DISABLE_TOASTS_PREF_STRING = "checkbox_disable_warnings";
     private static final String HOST_AUDIO_PREF_STRING = "checkbox_host_audio";
     private static final String DEADZONE_PREF_STRING = "seekbar_deadzone";
+    private static final String OSC_OPACITY_PREF_STRING = "seekbar_osc_opacity";
     private static final String LANGUAGE_PREF_STRING = "list_languages";
     private static final String LIST_MODE_PREF_STRING = "checkbox_list_mode";
     private static final String SMALL_ICONS_PREF_STRING = "checkbox_small_icon_mode";
     private static final String MULTI_CONTROLLER_PREF_STRING = "checkbox_multi_controller";
-    private static final String ENABLE_51_SURROUND_PREF_STRING = "checkbox_51_surround";
+    static final String AUDIO_CONFIG_PREF_STRING = "list_audio_config";
     private static final String USB_DRIVER_PREF_SRING = "checkbox_usb_driver";
     private static final String VIDEO_FORMAT_PREF_STRING = "video_format";
     private static final String ONSCREEN_CONTROLLER_PREF_STRING = "checkbox_show_onscreen_controls";
@@ -38,6 +41,8 @@ public class PreferenceConfiguration {
     static final String UNLOCK_FPS_STRING = "checkbox_unlock_fps";
     private static final String VIBRATE_OSC_PREF_STRING = "checkbox_vibrate_osc";
     private static final String VIBRATE_FALLBACK_PREF_STRING = "checkbox_vibrate_fallback";
+    private static final String FLIP_FACE_BUTTONS_PREF_STRING = "checkbox_flip_face_buttons";
+    private static final String TOUCHSCREEN_TRACKPAD_PREF_STRING = "checkbox_touchscreen_trackpad";
 
     static final String DEFAULT_RESOLUTION = "720p";
     static final String DEFAULT_FPS = "60";
@@ -46,10 +51,10 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_DISABLE_TOASTS = false;
     private static final boolean DEFAULT_HOST_AUDIO = false;
     private static final int DEFAULT_DEADZONE = 15;
+    private static final int DEFAULT_OPACITY = 90;
     public static final String DEFAULT_LANGUAGE = "default";
     private static final boolean DEFAULT_LIST_MODE = false;
     private static final boolean DEFAULT_MULTI_CONTROLLER = true;
-    private static final boolean DEFAULT_ENABLE_51_SURROUND = false;
     private static final boolean DEFAULT_USB_DRIVER = true;
     private static final String DEFAULT_VIDEO_FORMAT = "auto";
     private static final boolean ONSCREEN_CONTROLLER_DEFAULT = false;
@@ -64,6 +69,9 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_UNLOCK_FPS = false;
     private static final boolean DEFAULT_VIBRATE_OSC = true;
     private static final boolean DEFAULT_VIBRATE_FALLBACK = false;
+    private static final boolean DEFAULT_FLIP_FACE_BUTTONS = false;
+    private static final boolean DEFAULT_TOUCHSCREEN_TRACKPAD = true;
+    private static final String DEFAULT_AUDIO_CONFIG = "2"; // Stereo
 
     public static final int FORCE_H265_ON = -1;
     public static final int AUTOSELECT_H265 = 0;
@@ -73,9 +81,10 @@ public class PreferenceConfiguration {
     public int bitrate;
     public int videoFormat;
     public int deadzonePercentage;
+    public int oscOpacity;
     public boolean stretchVideo, enableSops, playHostAudio, disableWarnings;
     public String language;
-    public boolean listMode, smallIconMode, multiController, enable51Surround, usbDriver;
+    public boolean listMode, smallIconMode, multiController, usbDriver, flipFaceButtons;
     public boolean onscreenController;
     public boolean onlyL3R3;
     public boolean disableFrameDrop;
@@ -88,6 +97,8 @@ public class PreferenceConfiguration {
     public boolean unlockFps;
     public boolean vibrateOsc;
     public boolean vibrateFallbackToDevice;
+    public boolean touchscreenTrackpad;
+    public MoonBridge.AudioConfiguration audioConfiguration;
 
     private static int getHeightFromResolutionString(String resString) {
         if (resString.equalsIgnoreCase("360p")) {
@@ -244,6 +255,15 @@ public class PreferenceConfiguration {
         PreferenceConfiguration config = new PreferenceConfiguration();
 
         // Migrate legacy preferences to the new locations
+        if (prefs.contains(LEGACY_ENABLE_51_SURROUND_PREF_STRING)) {
+            if (prefs.getBoolean(LEGACY_ENABLE_51_SURROUND_PREF_STRING, false)) {
+                prefs.edit()
+                        .remove(LEGACY_ENABLE_51_SURROUND_PREF_STRING)
+                        .putString(AUDIO_CONFIG_PREF_STRING, "51")
+                        .apply();
+            }
+        }
+
         String str = prefs.getString(LEGACY_RES_FPS_PREF_STRING, null);
         if (str != null) {
             if (str.equals("360p30")) {
@@ -313,9 +333,22 @@ public class PreferenceConfiguration {
             config.bitrate = getDefaultBitrate(context);
         }
 
+        String audioConfig = prefs.getString(AUDIO_CONFIG_PREF_STRING, DEFAULT_AUDIO_CONFIG);
+        if (audioConfig.equals("71")) {
+            config.audioConfiguration = MoonBridge.AUDIO_CONFIGURATION_71_SURROUND;
+        }
+        else if (audioConfig.equals("51")) {
+            config.audioConfiguration = MoonBridge.AUDIO_CONFIGURATION_51_SURROUND;
+        }
+        else /* if (audioConfig.equals("2")) */ {
+            config.audioConfiguration = MoonBridge.AUDIO_CONFIGURATION_STEREO;
+        }
+
         config.videoFormat = getVideoFormatValue(context);
 
         config.deadzonePercentage = prefs.getInt(DEADZONE_PREF_STRING, DEFAULT_DEADZONE);
+
+        config.oscOpacity = prefs.getInt(OSC_OPACITY_PREF_STRING, DEFAULT_OPACITY);
 
         config.language = prefs.getString(LANGUAGE_PREF_STRING, DEFAULT_LANGUAGE);
 
@@ -327,7 +360,6 @@ public class PreferenceConfiguration {
         config.listMode = prefs.getBoolean(LIST_MODE_PREF_STRING, DEFAULT_LIST_MODE);
         config.smallIconMode = prefs.getBoolean(SMALL_ICONS_PREF_STRING, getDefaultSmallMode(context));
         config.multiController = prefs.getBoolean(MULTI_CONTROLLER_PREF_STRING, DEFAULT_MULTI_CONTROLLER);
-        config.enable51Surround = prefs.getBoolean(ENABLE_51_SURROUND_PREF_STRING, DEFAULT_ENABLE_51_SURROUND);
         config.usbDriver = prefs.getBoolean(USB_DRIVER_PREF_SRING, DEFAULT_USB_DRIVER);
         config.onscreenController = prefs.getBoolean(ONSCREEN_CONTROLLER_PREF_STRING, ONSCREEN_CONTROLLER_DEFAULT);
         config.onlyL3R3 = prefs.getBoolean(ONLY_L3_R3_PREF_STRING, ONLY_L3_R3_DEFAULT);
@@ -341,6 +373,8 @@ public class PreferenceConfiguration {
         config.unlockFps = prefs.getBoolean(UNLOCK_FPS_STRING, DEFAULT_UNLOCK_FPS);
         config.vibrateOsc = prefs.getBoolean(VIBRATE_OSC_PREF_STRING, DEFAULT_VIBRATE_OSC);
         config.vibrateFallbackToDevice = prefs.getBoolean(VIBRATE_FALLBACK_PREF_STRING, DEFAULT_VIBRATE_FALLBACK);
+        config.flipFaceButtons = prefs.getBoolean(FLIP_FACE_BUTTONS_PREF_STRING, DEFAULT_FLIP_FACE_BUTTONS);
+        config.touchscreenTrackpad = prefs.getBoolean(TOUCHSCREEN_TRACKPAD_PREF_STRING, DEFAULT_TOUCHSCREEN_TRACKPAD);
 
         return config;
     }

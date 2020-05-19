@@ -141,9 +141,17 @@ public class StreamSettings extends ActionMenuActivity {
             // hide on-screen controls category on non touch screen devices
             if (!getActivity().getPackageManager().
                     hasSystemFeature("android.hardware.touchscreen")) {
-                PreferenceCategory category =
-                        (PreferenceCategory) findPreference("category_onscreen_controls");
-                screen.removePreference(category);
+                {
+                    PreferenceCategory category =
+                            (PreferenceCategory) findPreference("category_onscreen_controls");
+                    screen.removePreference(category);
+                }
+
+                {
+                    PreferenceCategory category =
+                            (PreferenceCategory) findPreference("category_input_settings");
+                    category.removePreference(findPreference("checkbox_touchscreen_trackpad"));
+                }
             }
 
             // Remove PiP mode on devices pre-Oreo
@@ -300,6 +308,18 @@ public class StreamSettings extends ActionMenuActivity {
                     });
                 }
                 // Never remove 30 FPS or 60 FPS
+            }
+
+            // Android L introduces proper 7.1 surround sound support. Remove the 7.1 option
+            // for earlier versions of Android to prevent AudioTrack initialization issues.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+                LimeLog.info("Excluding 7.1 surround sound option based on OS");
+                removeValue(PreferenceConfiguration.AUDIO_CONFIG_PREF_STRING, "71", new Runnable() {
+                    @Override
+                    public void run() {
+                        setValue(PreferenceConfiguration.AUDIO_CONFIG_PREF_STRING, "51");
+                    }
+                });
             }
 
             // Android L introduces the drop duplicate behavior of releaseOutputBuffer()
