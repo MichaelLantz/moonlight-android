@@ -1,20 +1,26 @@
 package com.limelight.nvstream.http;
 
+import android.os.Build;
+
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.io.StringReader;
+import java.net.InetAddress;
 import java.net.MalformedURLException;
 import java.net.Socket;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.security.KeyManagementException;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.Principal;
 import java.security.PrivateKey;
 import java.security.SecureRandom;
+import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.LinkedList;
@@ -24,11 +30,16 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import javax.net.ssl.HostnameVerifier;
+import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLHandshakeException;
+import javax.net.ssl.SSLPeerUnverifiedException;
 import javax.net.ssl.SSLSession;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509KeyManager;
 import javax.net.ssl.X509TrustManager;
 
@@ -42,7 +53,6 @@ import com.limelight.nvstream.ConnectionContext;
 import com.limelight.nvstream.http.PairingManager.PairState;
 
 import okhttp3.ConnectionPool;
-import okhttp3.Handshake;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -66,34 +76,36 @@ public class NvHTTP {
     
     private OkHttpClient httpClient;
     private OkHttpClient httpClientWithReadTimeout;
-        
+
+    private X509TrustManager defaultTrustManager;
     private X509TrustManager trustManager;
     private X509KeyManager keyManager;
     private X509Certificate serverCert;
 
     void setServerCert(X509Certificate serverCert) {
         this.serverCert = serverCert;
-
-        trustManager = new X509TrustManager() {
-            public X509Certificate[] getAcceptedIssuers() {
-                return new X509Certificate[0];
-            }
-            public void checkClientTrusted(X509Certificate[] certs, String authType) {
-                throw new IllegalStateException("Should never be called");
-            }
-            public void checkServerTrusted(X509Certificate[] certs, String authType) throws CertificateException {
-                // Check the server certificate if we've paired to this host
-                if (!certs[0].equals(NvHTTP.this.serverCert)) {
-                    throw new CertificateException("Certificate mismatch");
-                }
-            }
-        };
     }
 
-    private void initializeHttpState(final X509Certificate serverCert, final LimelightCryptoProvider cryptoProvider) {
-        // Set up TrustManager
-        setServerCert(serverCert);
+    private static X509TrustManager getDefaultTrustManager() {
+        try {
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init((KeyStore) null);
 
+            for (TrustManager tm : tmf.getTrustManagers()) {
+                if (tm instanceof X509TrustManager) {
+                    return (X509TrustManager) tm;
+                }
+            }
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException(e);
+        } catch (KeyStoreException e) {
+            throw new RuntimeException(e);
+        }
+
+        throw new IllegalStateException("No X509 trust manager found");
+    }
+
+    private void initializeHttpState(final LimelightCryptoProvider cryptoProvider) {
         keyManager = new X509KeyManager() {
             public String chooseClientAlias(String[] keyTypes,
                     Principal[] issuers, Socket socket) { return "Limelight-RSA"; }
@@ -109,9 +121,51 @@ public class NvHTTP {
             public String[] getServerAliases(String keyType, Principal[] issuers) { return null; }
         };
 
-        // Ignore differences between given hostname and certificate hostname
+        defaultTrustManager = getDefaultTrustManager();
+        trustManager = new X509TrustManager() {
+            public X509Certificate[] getAcceptedIssuers() {
+                return new X509Certificate[0];
+            }
+            public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                throw new IllegalStateException("Should never be called");
+            }
+            public void checkServerTrusted(X509Certificate[] certs, String authType) throws CertificateException {
+                try {
+                    // Try the default trust manager first to allow pairing with certificates
+                    // that chain up to a trusted root CA. This will raise CertificateException
+                    // if the certificate is not trusted (expected for GFE's self-signed certs).
+                    defaultTrustManager.checkServerTrusted(certs, authType);
+                } catch (CertificateException e) {
+                    // Check the server certificate if we've paired to this host
+                    if (certs.length == 1 && NvHTTP.this.serverCert != null) {
+                        if (!certs[0].equals(NvHTTP.this.serverCert)) {
+                            throw new CertificateException("Certificate mismatch");
+                        }
+                    }
+                    else {
+                        // The cert chain doesn't look like a self-signed cert or we don't have
+                        // a certificate pinned, so re-throw the original validation error.
+                        throw e;
+                    }
+                }
+            }
+        };
+
         HostnameVerifier hv = new HostnameVerifier() {
-            public boolean verify(String hostname, SSLSession session) { return true; }
+            public boolean verify(String hostname, SSLSession session) {
+                try {
+                    Certificate[] certificates = session.getPeerCertificates();
+                    if (certificates.length == 1 && certificates[0].equals(NvHTTP.this.serverCert)) {
+                        // Allow any hostname if it's our pinned cert
+                        return true;
+                    }
+                } catch (SSLPeerUnverifiedException e) {
+                    e.printStackTrace();
+                }
+
+                // Fall back to default HostnameVerifier for validating CA-issued certs
+                return HttpsURLConnection.getDefaultHostnameVerifier().verify(hostname, session);
+            }
         };
 
         httpClient = new OkHttpClient.Builder()
@@ -131,7 +185,9 @@ public class NvHTTP {
         // started by other Moonlight clients.
         this.uniqueId = "0123456789ABCDEF";
 
-        initializeHttpState(serverCert, cryptoProvider);
+        this.serverCert = serverCert;
+
+        initializeHttpState(cryptoProvider);
 
         try {
             // The URI constructor takes care of escaping IPv6 literals
@@ -171,7 +227,7 @@ public class NvHTTP {
                 break;
             case (XmlPullParser.TEXT):
                 if (currentTag.peek().equals(tagname)) {
-                    return xpp.getText().trim();
+                    return xpp.getText();
                 }
                 break;
             }
@@ -270,11 +326,7 @@ public class NvHTTP {
         // This has some extra logic to always report unpaired if the pinned cert isn't there
         details.pairState = getPairState(serverInfo);
         
-        try {
-            details.runningGameId = getCurrentGame(serverInfo);
-        } catch (NumberFormatException e) {
-            details.runningGameId = 0;
-        }
+        details.runningGameId = getCurrentGame(serverInfo);
         
         // We could reach it so it's online
         details.state = ComputerDetails.State.ONLINE;
@@ -290,22 +342,19 @@ public class NvHTTP {
         try {
             SSLContext sc = SSLContext.getInstance("TLS");
             sc.init(new KeyManager[] { keyManager }, new TrustManager[] { trustManager }, new SecureRandom());
-            return client.newBuilder().sslSocketFactory(sc.getSocketFactory(), trustManager).build();
+
+            // TLS 1.2 is not enabled by default prior to Android 5.0, so we'll need a custom
+            // SSLSocketFactory in order to connect to GFE 3.20.4 which requires TLSv1.2 or later.
+            // We don't just always use TLSv12SocketFactory because explicitly specifying TLS versions
+            // prevents later TLS versions from being negotiated even if client and server otherwise
+            // support them.
+            return client.newBuilder().sslSocketFactory(
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP ?
+                            sc.getSocketFactory() : new TLSv12SocketFactory(sc),
+                    trustManager).build();
         } catch (NoSuchAlgorithmException | KeyManagementException e) {
             throw new RuntimeException(e);
         }
-    }
-
-    public X509Certificate getCertificateIfTrusted() {
-        try {
-            Response resp = httpClient.newCall(new Request.Builder().url(baseUrlHttps).get().build()).execute();
-            Handshake handshake = resp.handshake();
-            if (handshake != null) {
-                return (X509Certificate)handshake.peerCertificates().get(0);
-            }
-        } catch (IOException ignored) {}
-
-        return null;
     }
 
     // Read timeout should be enabled for any HTTP query that requires no outside action
@@ -315,10 +364,6 @@ public class NvHTTP {
     private ResponseBody openHttpConnection(String url, boolean enableReadTimeout) throws IOException {
         Request request = new Request.Builder().url(url).get().build();
         Response response;
-
-        if (serverCert == null && !url.startsWith(baseUrlHttp)) {
-            throw new IllegalStateException("Attempted HTTPS fetch without pinned cert");
-        }
 
         if (enableReadTimeout) {
             response = performAndroidTlsHack(httpClientWithReadTimeout).newCall(request).execute();
@@ -379,11 +424,6 @@ public class NvHTTP {
     }
 
     public PairingManager.PairState getPairState(String serverInfo) throws IOException, XmlPullParserException {
-        // If we don't have a server cert, we can't be paired even if the host thinks we are
-        if (serverCert == null) {
-            return PairState.NOT_PAIRED;
-        }
-
         if (!NvHTTP.getXmlString(serverInfo, "PairStatus").equals("1")) {
             return PairState.NOT_PAIRED;
         }
@@ -394,11 +434,7 @@ public class NvHTTP {
     public long getMaxLumaPixelsH264(String serverInfo) throws XmlPullParserException, IOException {
         String str = getXmlString(serverInfo, "MaxLumaPixelsH264");
         if (str != null) {
-            try {
-                return Long.parseLong(str);
-            } catch (NumberFormatException e) {
-                return 0;
-            }
+            return Long.parseLong(str);
         } else {
             return 0;
         }
@@ -407,11 +443,7 @@ public class NvHTTP {
     public long getMaxLumaPixelsHEVC(String serverInfo) throws XmlPullParserException, IOException {
         String str = getXmlString(serverInfo, "MaxLumaPixelsHEVC");
         if (str != null) {
-            try {
-                return Long.parseLong(str);
-            } catch (NumberFormatException e) {
-                return 0;
-            }
+            return Long.parseLong(str);
         } else {
             return 0;
         }
@@ -428,11 +460,7 @@ public class NvHTTP {
     public long getServerCodecModeSupport(String serverInfo) throws XmlPullParserException, IOException {
         String str = getXmlString(serverInfo, "ServerCodecModeSupport");
         if (str != null) {
-            try {
-                return Long.parseLong(str);
-            } catch (NumberFormatException e) {
-                return 0;
-            }
+            return Long.parseLong(str);
         } else {
             return 0;
         }
@@ -529,11 +557,11 @@ public class NvHTTP {
             case (XmlPullParser.TEXT):
                 NvApp app = appList.getLast();
                 if (currentTag.peek().equals("AppTitle")) {
-                    app.setAppName(xpp.getText().trim());
+                    app.setAppName(xpp.getText());
                 } else if (currentTag.peek().equals("ID")) {
-                    app.setAppId(xpp.getText().trim());
+                    app.setAppId(xpp.getText());
                 } else if (currentTag.peek().equals("IsHdrSupported")) {
-                    app.setHdrSupported(xpp.getText().trim().equals("1"));
+                    app.setHdrSupported(xpp.getText().equals("1"));
                 }
                 break;
             }
@@ -588,36 +616,23 @@ public class NvHTTP {
     }
     
     public int getServerMajorVersion(String serverInfo) throws XmlPullParserException, IOException {
-        int[] appVersionQuad = getServerAppVersionQuad(serverInfo);
-        if (appVersionQuad != null) {
-            return appVersionQuad[0];
-        }
-        else {
-            return 0;
-        }
+        return getServerAppVersionQuad(serverInfo)[0];
     }
     
     public int[] getServerAppVersionQuad(String serverInfo) throws XmlPullParserException, IOException {
-        try {
-            String serverVersion = getServerVersion(serverInfo);
-            if (serverVersion == null) {
-                LimeLog.warning("Missing server version field");
-                return null;
-            }
-            String[] serverVersionSplit = serverVersion.split("\\.");
-            if (serverVersionSplit.length != 4) {
-                LimeLog.warning("Malformed server version field");
-                return null;
-            }
-            int[] ret = new int[serverVersionSplit.length];
-            for (int i = 0; i < ret.length; i++) {
-                ret[i] = Integer.parseInt(serverVersionSplit[i]);
-            }
-            return ret;
-        } catch (NumberFormatException e) {
-            e.printStackTrace();
-            return null;
+        String serverVersion = getServerVersion(serverInfo);
+        if (serverVersion == null) {
+            throw new IllegalArgumentException("Missing server version field");
         }
+        String[] serverVersionSplit = serverVersion.split("\\.");
+        if (serverVersionSplit.length != 4) {
+            throw new IllegalArgumentException("Malformed server version field: "+serverVersion);
+        }
+        int[] ret = new int[serverVersionSplit.length];
+        for (int i = 0; i < ret.length; i++) {
+            ret[i] = Integer.parseInt(serverVersionSplit[i]);
+        }
+        return ret;
     }
 
     final private static char[] hexArray = "0123456789ABCDEF".toCharArray();
@@ -632,6 +647,12 @@ public class NvHTTP {
     }
     
     public boolean launchApp(ConnectionContext context, int appId, boolean enableHdr) throws IOException, XmlPullParserException {
+        // Using an FPS value over 60 causes SOPS to default to 720p60,
+        // so force it to 0 to ensure the correct resolution is set. We
+        // used to use 60 here but that locked the frame rate to 60 FPS
+        // on GFE 3.20.3.
+        int fps = context.streamConfig.getLaunchRefreshRate() > 60 ? 0 : context.streamConfig.getLaunchRefreshRate();
+
         // Using an unsupported resolution (not 720p, 1080p, or 4K) causes
         // GFE to force SOPS to 720p60. This is fine for < 720p resolutions like
         // 360p or 480p, but it is not ideal for 1440p and other resolutions.
@@ -645,20 +666,10 @@ public class NvHTTP {
             enableSops = false;
         }
 
-        // Using SOPS with FPS values over 60 causes GFE to fall back
-        // to 720p60. On previous GFE versions, we could avoid this by
-        // forcing the FPS value to 60 when launching the stream, but
-        // now on GFE 3.20.3 that seems to trigger some sort of
-        // frame rate limiter that locks the game to 60 FPS.
-        if (context.streamConfig.getLaunchRefreshRate() > 60) {
-            LimeLog.info("Disabling SOPS due to high frame rate: "+context.streamConfig.getLaunchRefreshRate());
-            enableSops = false;
-        }
-
         String xmlStr = openHttpConnectionToString(baseUrlHttps +
             "/launch?" + buildUniqueIdUuidString() +
             "&appid=" + appId +
-            "&mode=" + context.negotiatedWidth + "x" + context.negotiatedHeight + "x" + context.streamConfig.getLaunchRefreshRate() +
+            "&mode=" + context.negotiatedWidth + "x" + context.negotiatedHeight + "x" + fps +
             "&additionalStates=1&sops=" + (enableSops ? 1 : 0) +
             "&rikey="+bytesToHex(context.riKey.getEncoded()) +
             "&rikeyid="+context.riKeyId +
@@ -669,7 +680,13 @@ public class NvHTTP {
             (context.streamConfig.getAttachedGamepadMask() != 0 ? "&gcmap=" + context.streamConfig.getAttachedGamepadMask() : ""),
             false);
         String gameSession = getXmlString(xmlStr, "gamesession");
-        return gameSession != null && !gameSession.equals("0");
+        if (gameSession != null && !gameSession.equals("0")) {
+            context.rtspSessionUrl = getXmlString(xmlStr, "sessionUrl0");
+            return true;
+        }
+        else {
+            return false;
+        }
     }
     
     public boolean resumeApp(ConnectionContext context) throws IOException, XmlPullParserException {
@@ -679,7 +696,13 @@ public class NvHTTP {
                 "&surroundAudioInfo=" + context.streamConfig.getAudioConfiguration().getSurroundAudioInfo(),
                 false);
         String resume = getXmlString(xmlStr, "resume");
-        return Integer.parseInt(resume) != 0;
+        if (Integer.parseInt(resume) != 0) {
+            context.rtspSessionUrl = getXmlString(xmlStr, "sessionUrl0");
+            return true;
+        }
+        else {
+            return false;
+        }
     }
     
     public boolean quitApp() throws IOException, XmlPullParserException {
@@ -698,5 +721,63 @@ public class NvHTTP {
         }
 
         return true;
+    }
+
+    // Based on example code from https://blog.dev-area.net/2015/08/13/android-4-1-enable-tls-1-1-and-tls-1-2/
+    private static class TLSv12SocketFactory extends SSLSocketFactory {
+        private SSLSocketFactory internalSSLSocketFactory;
+
+        public TLSv12SocketFactory(SSLContext context) {
+            internalSSLSocketFactory = context.getSocketFactory();
+        }
+
+        @Override
+        public String[] getDefaultCipherSuites() {
+            return internalSSLSocketFactory.getDefaultCipherSuites();
+        }
+
+        @Override
+        public String[] getSupportedCipherSuites() {
+            return internalSSLSocketFactory.getSupportedCipherSuites();
+        }
+
+        @Override
+        public Socket createSocket() throws IOException {
+            return enableTLSv12OnSocket(internalSSLSocketFactory.createSocket());
+        }
+
+        @Override
+        public Socket createSocket(Socket s, String host, int port, boolean autoClose) throws IOException {
+            return enableTLSv12OnSocket(internalSSLSocketFactory.createSocket(s, host, port, autoClose));
+        }
+
+        @Override
+        public Socket createSocket(String host, int port) throws IOException {
+            return enableTLSv12OnSocket(internalSSLSocketFactory.createSocket(host, port));
+        }
+
+        @Override
+        public Socket createSocket(String host, int port, InetAddress localHost, int localPort) throws IOException {
+            return enableTLSv12OnSocket(internalSSLSocketFactory.createSocket(host, port, localHost, localPort));
+        }
+
+        @Override
+        public Socket createSocket(InetAddress host, int port) throws IOException {
+            return enableTLSv12OnSocket(internalSSLSocketFactory.createSocket(host, port));
+        }
+
+        @Override
+        public Socket createSocket(InetAddress address, int port, InetAddress localAddress, int localPort) throws IOException {
+            return enableTLSv12OnSocket(internalSSLSocketFactory.createSocket(address, port, localAddress, localPort));
+        }
+
+        private Socket enableTLSv12OnSocket(Socket socket) {
+            if (socket instanceof SSLSocket) {
+                // TLS 1.2 is not enabled by default prior to Android 5.0. We must enable it
+                // explicitly to ensure we can communicate with GFE 3.20.4 which blocks TLS 1.0.
+                ((SSLSocket)socket).setEnabledProtocols(new String[] {"TLSv1.2"});
+            }
+            return socket;
+        }
     }
 }

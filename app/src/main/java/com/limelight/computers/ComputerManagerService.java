@@ -4,8 +4,10 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.StringReader;
 import java.net.Inet4Address;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.UnknownHostException;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
@@ -38,6 +40,7 @@ import android.net.NetworkCapabilities;
 import android.os.Binder;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.SystemClock;
 
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -134,6 +137,18 @@ public class ComputerManagerService extends Service {
                 dbManager.updateComputer(existingComputer);
             }
             else {
+                try {
+                    // If the active address is a site-local address (RFC 1918),
+                    // then use STUN to populate the external address field if
+                    // it's not set already.
+                    if (details.remoteAddress == null) {
+                        InetAddress addr = InetAddress.getByName(details.activeAddress);
+                        if (addr.isSiteLocalAddress()) {
+                            populateExternalAddress(details);
+                        }
+                    }
+                } catch (UnknownHostException ignored) {}
+
                 dbManager.updateComputer(details);
             }
         }
@@ -162,7 +177,7 @@ public class ComputerManagerService extends Service {
                                 LimeLog.warning(tuple.computer.name + " is offline (try " + offlineCount + ")");
                                 offlineCount++;
                             } else {
-                                tuple.lastSuccessfulPollMs = System.currentTimeMillis();
+                                tuple.lastSuccessfulPollMs = SystemClock.elapsedRealtime();
                                 offlineCount = 0;
                             }
                         }
@@ -193,7 +208,7 @@ public class ComputerManagerService extends Service {
             synchronized (pollingTuples) {
                 for (PollingTuple tuple : pollingTuples) {
                     // Enforce the poll data TTL
-                    if (System.currentTimeMillis() - tuple.lastSuccessfulPollMs > POLL_DATA_TTL_MS) {
+                    if (SystemClock.elapsedRealtime() - tuple.lastSuccessfulPollMs > POLL_DATA_TTL_MS) {
                         LimeLog.info("Timing out polled state for "+tuple.computer.name);
                         tuple.computer.state = ComputerDetails.State.UNKNOWN;
                     }

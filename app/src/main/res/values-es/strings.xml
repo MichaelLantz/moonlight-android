@@ -88,7 +88,6 @@
     <string name="summary_resolution_list">Establecer unos valores demasiado altos puede causar lag o cierres inesperados</string>
     <string name="title_seekbar_bitrate">Seleccionar bitrate de vídeo</string>
     <string name="summary_seekbar_bitrate">Usa bitrate bajo para reducir "parpadeo". Incrementa el bitrate para mayor calidad de imagen.</string>
-    <string name="suffix_seekbar_bitrate">Kbps</string>
     <string name="title_checkbox_stretch_video">Ajustar vídeo a pantalla completa</string>
     <string name="title_checkbox_disable_warnings">Desactivar mensajes de advertencia</string>
     <string name="summary_checkbox_disable_warnings">Desactivar mensajes de advertencia en pantalla durante la transmisión</string>
@@ -111,8 +110,6 @@
     <string name="category_ui_settings">Configuración de la interfaz</string>
     <string name="title_language_list">Idioma</string>
     <string name="summary_language_list">Idioma a usar por Moonlight</string>
-    <string name="title_checkbox_list_mode">Usar listas en lugar de cuadrículas</string>
-    <string name="summary_checkbox_list_mode">Mostrar aplicaciones y PCs en listas en lugar de el cuadrículas</string>
     <string name="title_checkbox_small_icon_mode">Usar iconos pequeños</string>
     <string name="summary_checkbox_small_icon_mode">Usar iconos pequeños en las entradas de cuadrículas para permitir más entradas en la pantalla</string>
 
@@ -123,7 +120,7 @@
     <string name="summary_checkbox_host_audio">Reproducir audio en el ordenador y en este dispositivo</string>
 
     <string name="category_advanced_settings">Configuración avanzada</string>
-    <string name="title_video_format">Cambiar configuración H.265</string>
-    <string name="summary_video_format">H.265 reduce el ancho de banda de vídeo, pero requiere un dispositivo bastante actual.</string>
+    <string name="title_video_format">Cambiar configuración HEVC</string>
+    <string name="summary_video_format">HEVC reduce el ancho de banda de vídeo, pero requiere un dispositivo bastante actual.</string>
 
 </resources>

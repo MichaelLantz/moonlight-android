@@ -18,6 +18,10 @@ public class MoonBridge {
     public static final int VIDEO_FORMAT_MASK_H264 = 0x00FF;
     public static final int VIDEO_FORMAT_MASK_H265 = 0xFF00;
 
+    public static final int ENCFLG_NONE = 0;
+    public static final int ENCFLG_AUDIO = 1;
+    public static final int ENCFLG_ALL = 0xFFFFFFFF;
+
     public static final int BUFFER_TYPE_PICDATA = 0;
     public static final int BUFFER_TYPE_SPS = 1;
     public static final int BUFFER_TYPE_PPS = 2;
@@ -35,6 +39,28 @@ public class MoonBridge {
 
     public static final int ML_ERROR_GRACEFUL_TERMINATION = 0;
     public static final int ML_ERROR_NO_VIDEO_TRAFFIC = -100;
+    public static final int ML_ERROR_NO_VIDEO_FRAME = -101;
+    public static final int ML_ERROR_UNEXPECTED_EARLY_TERMINATION = -102;
+    public static final int ML_ERROR_PROTECTED_CONTENT = -103;
+
+    public static final int ML_PORT_INDEX_TCP_47984 = 0;
+    public static final int ML_PORT_INDEX_TCP_47989 = 1;
+    public static final int ML_PORT_INDEX_TCP_48010 = 2;
+    public static final int ML_PORT_INDEX_UDP_47998 = 8;
+    public static final int ML_PORT_INDEX_UDP_47999 = 9;
+    public static final int ML_PORT_INDEX_UDP_48000 = 10;
+    public static final int ML_PORT_INDEX_UDP_48010 = 11;
+
+    public static final int ML_PORT_FLAG_ALL = 0xFFFFFFFF;
+    public static final int ML_PORT_FLAG_TCP_47984 = 0x0001;
+    public static final int ML_PORT_FLAG_TCP_47989 = 0x0002;
+    public static final int ML_PORT_FLAG_TCP_48010 = 0x0004;
+    public static final int ML_PORT_FLAG_UDP_47998 = 0x0100;
+    public static final int ML_PORT_FLAG_UDP_47999 = 0x0200;
+    public static final int ML_PORT_FLAG_UDP_48000 = 0x0400;
+    public static final int ML_PORT_FLAG_UDP_48010 = 0x0800;
+
+    public static final int ML_TEST_RESULT_INCONCLUSIVE = 0xFFFFFFFF;
 
     private static AudioRenderer audioRenderer;
     private static VideoDecoderRenderer videoRenderer;
@@ -128,11 +154,11 @@ public class MoonBridge {
     }
 
     public static int bridgeDrSubmitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength,
-                                               int decodeUnitType,
-                                               int frameNumber, long receiveTimeMs) {
+                                               int decodeUnitType, int frameNumber,
+                                               long receiveTimeMs, long enqueueTimeMs) {
         if (videoRenderer != null) {
             return videoRenderer.submitDecodeUnit(decodeUnitData, decodeUnitLength,
-                    decodeUnitType, frameNumber, receiveTimeMs);
+                    decodeUnitType, frameNumber, receiveTimeMs, enqueueTimeMs);
         }
         else {
             return DR_OK;
@@ -186,7 +212,7 @@ public class MoonBridge {
 
     public static void bridgeClStageFailed(int stage, int errorCode) {
         if (connectionListener != null) {
-            connectionListener.stageFailed(getStageName(stage), errorCode);
+            connectionListener.stageFailed(getStageName(stage), getPortFlagsFromStage(stage), errorCode);
         }
     }
 
@@ -227,12 +253,14 @@ public class MoonBridge {
     }
 
     public static native int startConnection(String address, String appVersion, String gfeVersion,
+                                              String rtspSessionUrl,
                                               int width, int height, int fps,
                                               int bitrate, int packetSize, int streamingRemotely,
                                               int audioConfiguration, boolean supportsHevc,
                                               boolean enableHdr,
                                               int hevcBitratePercentageMultiplier,
                                               int clientRefreshRateX100,
+                                              int encryptionFlags,
                                               byte[] riAesKey, byte[] riAesIv,
                                               int videoCapabilities);
 
@@ -263,6 +291,8 @@ public class MoonBridge {
 
     public static native void sendMouseHighResScroll(short scrollAmount);
 
+    public static native void sendUtf8Text(String text);
+
     public static native String getStageName(int stage);
 
     public static native String findExternalAddressIP4(String stunHostName, int stunPort);
@@ -270,6 +300,17 @@ public class MoonBridge {
     public static native int getPendingAudioDuration();
 
     public static native int getPendingVideoFrames();
+
+    public static native int testClientConnectivity(String testServerHostName, int referencePort, int testFlags);
+
+    public static native int getPortFlagsFromStage(int stage);
+
+    public static native int getPortFlagsFromTerminationErrorCode(int errorCode);
+
+    public static native String stringifyPortFlags(int portFlags, String separator);
+
+    // The RTT is in the top 32 bits, and the RTT variance is in the bottom 32 bits
+    public static native long getEstimatedRttInfo();
 
     public static native void init();
 }

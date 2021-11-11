@@ -84,7 +84,6 @@
     <string name="summary_resolution_list">品質が高いほどラグとクラッシュが発生しやすくなります</string>
     <string name="title_seekbar_bitrate">映像のビットレート</string>
     <string name="summary_seekbar_bitrate">ビットレートを低くすればカクつきが抑制され、高くすれば画質が向上します</string>
-    <string name="suffix_seekbar_bitrate">Kbps</string>
     <string name="title_checkbox_stretch_video">映像を全画面に拡大</string>
     <string name="title_checkbox_disable_warnings">警告を無効化</string>
     <string name="summary_checkbox_disable_warnings">ストリーミング中に画面に警告メッセージを表示しない</string>
@@ -105,8 +104,6 @@
     <string name="category_ui_settings">インターフェース</string>
     <string name="title_language_list">言語</string>
     <string name="summary_language_list">Moonlightで使用する言語</string>
-    <string name="title_checkbox_list_mode">リストメニュー</string>
-    <string name="summary_checkbox_list_mode">ゲームをグリッドではなく、リストで表示します</string>
     <string name="title_checkbox_small_icon_mode">小さなアイコン</string>
     <string name="summary_checkbox_small_icon_mode">グリッドで小さなアイコンを使用します</string>
 
@@ -117,8 +114,8 @@
     <string name="summary_checkbox_host_audio">音声をコンピュータとこのデバイスの両方で再生します</string>
 
     <string name="category_advanced_settings">高度な設定</string>
-    <string name="title_video_format">H.265</string>
-    <string name="summary_video_format">H.265は動画に必要な帯域幅を圧縮します。この機能にはなるべく新しいデバイスが必要です</string>
+    <string name="title_video_format">HEVC</string>
+    <string name="summary_video_format">HEVCは動画に必要な帯域幅を圧縮します。この機能にはなるべく新しいデバイスが必要です</string>
     <string name="suffix_osc_opacity">%</string>
     <string name="dialog_title_osc_opacity">透過率</string>
     <string name="title_osc_opacity">透過率</string>

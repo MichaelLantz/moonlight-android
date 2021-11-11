@@ -2,6 +2,7 @@ package com.limelight;
 
 import java.io.IOException;
 import java.io.StringReader;
+import java.util.HashSet;
 import java.util.List;
 
 import com.limelight.computers.ComputerManagerListener;
@@ -26,6 +27,7 @@ import android.app.Service;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
@@ -59,17 +61,22 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
     private int lastRunningAppId;
     private boolean suspendGridUpdates;
     private boolean inForeground;
+    private boolean showHiddenApps;
+    private HashSet<Integer> hiddenAppIds = new HashSet<>();
 
     private final static int START_OR_RESUME_ID = 1;
     private final static int QUIT_ID = 2;
-    private final static int CANCEL_ID = 3;
     private final static int START_WITH_QUIT = 4;
     private final static int VIEW_DETAILS_ID = 5;
     private final static int CREATE_SHORTCUT_ID = 6;
+    private final static int HIDE_APP_ID = 7;
+
+    public final static String HIDDEN_APPS_PREF_FILENAME = "HiddenApps";
 
     public final static String NAME_EXTRA = "Name";
     public final static String UUID_EXTRA = "UUID";
     public final static String NEW_PAIR_EXTRA = "NewPair";
+    public final static String SHOW_HIDDEN_APPS_EXTRA = "ShowHiddenApps";
 
     private ComputerManagerService.ComputerManagerBinder managerBinder;
     private final ServiceConnection serviceConnection = new ServiceConnection() {
@@ -98,12 +105,15 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
                     try {
                         appGridAdapter = new AppGridAdapter(AppView.this,
                                 PreferenceConfiguration.readPreferences(AppView.this),
-                                computer, localBinder.getUniqueId());
+                                computer, localBinder.getUniqueId(),
+                                showHiddenApps);
                     } catch (Exception e) {
                         e.printStackTrace();
                         finish();
                         return;
                     }
+
+                    appGridAdapter.updateHiddenApps(hiddenAppIds, true);
 
                     // Now make the binder visible. We must do this after appGridAdapter
                     // is set to prevent us from reaching updateUiWithServerinfo() and
@@ -285,7 +295,13 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
 
         UiHelper.notifyNewRootView(this);
 
+        showHiddenApps = getIntent().getBooleanExtra(SHOW_HIDDEN_APPS_EXTRA, false);
         uuidString = getIntent().getStringExtra(UUID_EXTRA);
+
+        SharedPreferences hiddenAppsPrefs = getSharedPreferences(HIDDEN_APPS_PREF_FILENAME, MODE_PRIVATE);
+        for (String hiddenAppIdStr : hiddenAppsPrefs.getStringSet(uuidString, new HashSet<String>())) {
+            hiddenAppIds.add(Integer.parseInt(hiddenAppIdStr));
+        }
 
         String computerName = getIntent().getStringExtra(NAME_EXTRA);
 
@@ -296,6 +312,21 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
         // Bind to the computer manager service
         bindService(new Intent(this, ComputerManagerService.class), serviceConnection,
                 Service.BIND_AUTO_CREATE);
+    }
+
+    private void updateHiddenApps(boolean hideImmediately) {
+        HashSet<String> hiddenAppIdStringSet = new HashSet<>();
+
+        for (Integer hiddenAppId : hiddenAppIds) {
+            hiddenAppIdStringSet.add(hiddenAppId.toString());
+        }
+
+        getSharedPreferences(HIDDEN_APPS_PREF_FILENAME, MODE_PRIVATE)
+                .edit()
+                .putStringSet(uuidString, hiddenAppIdStringSet)
+                .apply();
+
+        appGridAdapter.updateHiddenApps(hiddenAppIds, hideImmediately);
     }
 
     private void populateAppGridWithCache() {
@@ -357,6 +388,7 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
         super.onCreateActionMenu(menu);
 
         AppObject selectedApp = (AppObject) appGridAdapter.getItem(menuPosition);
+
         if (lastRunningAppId != 0) {
             if (lastRunningAppId == selectedApp.app.getAppId()) {
                 menu.add(Menu.NONE, START_OR_RESUME_ID, 1, getResources().getString(R.string.applist_menu_resume));
@@ -364,31 +396,38 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
             }
             else {
                 menu.add(Menu.NONE, START_WITH_QUIT, 1, getResources().getString(R.string.applist_menu_quit_and_start));
-                menu.add(Menu.NONE, CANCEL_ID, 2, getResources().getString(R.string.applist_menu_cancel));
             }
         }
-        menu.add(Menu.NONE, VIEW_DETAILS_ID, 3, getResources().getString(R.string.applist_menu_details));
+
+        // Only show the hide checkbox if this is not the currently running app or it's already hidden
+        if (lastRunningAppId != selectedApp.app.getAppId() || selectedApp.isHidden) {
+            MenuItem hideAppItem = menu.add(Menu.NONE, HIDE_APP_ID, 3, getResources().getString(R.string.applist_menu_hide_app));
+            hideAppItem.setCheckable(true);
+            hideAppItem.setChecked(selectedApp.isHidden);
+        }
+
+        menu.add(Menu.NONE, VIEW_DETAILS_ID, 4, getResources().getString(R.string.applist_menu_details));
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             // Only add an option to create shortcut if box art is loaded
             // and when we're in grid-mode (not list-mode).
-            ImageView appImageView = null; //= info.targetView.findViewById(R.id.grid_image);
+            ImageView appImageView = null; //info.targetView.findViewById(R.id.grid_image);
             if (appImageView != null) {
                 // We have a grid ImageView, so we must be in grid-mode
                 BitmapDrawable drawable = (BitmapDrawable)appImageView.getDrawable();
                 if (drawable != null && drawable.getBitmap() != null) {
                     // We have a bitmap loaded too
-                    menu.add(Menu.NONE, CREATE_SHORTCUT_ID, 4, getResources().getString(R.string.applist_menu_scut));
+                    menu.add(Menu.NONE, CREATE_SHORTCUT_ID, 5, getResources().getString(R.string.applist_menu_scut));
                 }
             }
         }
         return true;
     }
-/*
-    @Override
-    public void onActionMenuClosed(Menu menu) {
-    }
-*/
+
+    //@Override
+    //public void onActionMenuClosed(Menu menu) {
+    //}
+
     @Override
     public boolean onActionItemSelected(MenuItem item) {
         AdapterContextMenuInfo info = (AdapterContextMenuInfo) item.getMenuInfo();
@@ -430,12 +469,20 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
                 }, null);
                 return true;
 
-            case CANCEL_ID:
+            case VIEW_DETAILS_ID:
+                Dialog.displayDialog(AppView.this, getResources().getString(R.string.title_details), app.app.toString(), false);
                 return true;
 
-            case VIEW_DETAILS_ID:
-                Dialog.displayDialog(AppView.this, getResources().getString(R.string.title_details),
-                        getResources().getString(R.string.applist_details_id) + " " + app.app.getAppId(), false);
+            case HIDE_APP_ID:
+                if (item.isChecked()) {
+                    // Transitioning hidden to shown
+                    hiddenAppIds.remove(app.app.getAppId());
+                }
+                else {
+                    // Transitioning shown to hidden
+                    hiddenAppIds.add(app.app.getAppId());
+                }
+                updateHiddenApps(false);
                 return true;
 
             case CREATE_SHORTCUT_ID:
@@ -447,7 +494,7 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
                 return true;
 
             default:
-                return super.onActionItemSelected(item);
+                return super.onContextItemSelected(item);
         }
     }
 
@@ -517,6 +564,12 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
                     if (!foundExistingApp) {
                         // This app must be new
                         appGridAdapter.addApp(new AppObject(app));
+
+                        // We could have a leftover shortcut from last time this PC was paired
+                        // or if this app was removed then added again. Enable those shortcuts
+                        // again if present.
+                        shortcutHelper.enableAppShortcut(computer, app);
+
                         updated = true;
                     }
                 }
@@ -559,9 +612,8 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
 
     @Override
     public int getAdapterFragmentLayoutId() {
-        return PreferenceConfiguration.readPreferences(this).listMode ?
-                R.layout.list_view : (PreferenceConfiguration.readPreferences(AppView.this).smallIconMode ?
-                    R.layout.app_grid_view_small : R.layout.app_grid_view);
+        return PreferenceConfiguration.readPreferences(AppView.this).smallIconMode ?
+                    R.layout.app_grid_view_small : R.layout.app_grid_view;
     }
 
     @Override
@@ -588,9 +640,10 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
         listView.requestFocus();
     }
 
-    public class AppObject {
+    public static class AppObject {
         public final NvApp app;
         public boolean isRunning;
+        public boolean isHidden;
 
         public AppObject(NvApp app) {
             if (app == null) {

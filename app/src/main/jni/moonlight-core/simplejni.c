@@ -4,6 +4,7 @@
 #include <android/log.h>
 
 #include <arpa/inet.h>
+#include <string.h>
 
 JNIEXPORT void JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_sendMouseMove(JNIEnv *env, jclass clazz, jshort deltaX, jshort deltaY) {
@@ -55,6 +56,13 @@ Java_com_limelight_nvstream_jni_MoonBridge_sendMouseHighResScroll(JNIEnv *env, j
 }
 
 JNIEXPORT void JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_sendUtf8Text(JNIEnv *env, jclass clazz, jstring text) {
+    const char* utf8Text = (*env)->GetStringUTFChars(env, text, NULL);
+    LiSendUtf8TextEvent(utf8Text, strlen(utf8Text));
+    (*env)->ReleaseStringUTFChars(env, text, utf8Text);
+}
+
+JNIEXPORT void JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_stopConnection(JNIEnv *env, jclass clazz) {
     LiStopConnection();
 }
@@ -101,4 +109,48 @@ Java_com_limelight_nvstream_jni_MoonBridge_getPendingAudioDuration(JNIEnv *env, 
 JNIEXPORT jint JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_getPendingVideoFrames(JNIEnv *env, jclass clazz) {
     return LiGetPendingVideoFrames();
+}
+
+JNIEXPORT jint JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_testClientConnectivity(JNIEnv *env, jclass clazz, jstring testServerHostName, jint referencePort, jint testFlags) {
+    int ret;
+    const char* testServerHostNameStr = (*env)->GetStringUTFChars(env, testServerHostName, NULL);
+
+    ret = LiTestClientConnectivity(testServerHostNameStr, (unsigned short)referencePort, testFlags);
+
+    (*env)->ReleaseStringUTFChars(env, testServerHostName, testServerHostNameStr);
+
+    return ret;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getPortFlagsFromStage(JNIEnv *env, jclass clazz, jint stage) {
+    return LiGetPortFlagsFromStage(stage);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getPortFlagsFromTerminationErrorCode(JNIEnv *env, jclass clazz, jint errorCode) {
+    return LiGetPortFlagsFromTerminationErrorCode(errorCode);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_stringifyPortFlags(JNIEnv *env, jclass clazz, jint portFlags, jstring separator) {
+    const char* separatorStr = (*env)->GetStringUTFChars(env, separator, NULL);
+    char outputBuffer[512];
+
+    LiStringifyPortFlags(portFlags, separatorStr, outputBuffer, sizeof(outputBuffer));
+
+    (*env)->ReleaseStringUTFChars(env, separator, separatorStr);
+    return (*env)->NewStringUTF(env, outputBuffer);
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getEstimatedRttInfo(JNIEnv *env, jclass clazz) {
+    uint32_t rtt, variance;
+
+    if (!LiGetEstimatedRttInfo(&rtt, &variance)) {
+        return -1;
+    }
+
+    return ((uint64_t)rtt << 32U) | variance;
 }

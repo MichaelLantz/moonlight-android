@@ -6,6 +6,7 @@ import android.widget.Toast;
 
 import com.limelight.AppView;
 import com.limelight.Game;
+import com.limelight.PcView;
 import com.limelight.R;
 import com.limelight.ShortcutTrampoline;
 import com.limelight.binding.PlatformBinding;
@@ -14,6 +15,7 @@ import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.GfeHttpResponseException;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
+import com.limelight.nvstream.jni.MoonBridge;
 
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -23,6 +25,8 @@ import java.net.UnknownHostException;
 import java.security.cert.CertificateEncodingException;
 
 public class ServerHelper {
+    public static final String CONNECTION_TEST_SERVER = "android.conntest.moonlight-stream.org";
+
     public static String getCurrentAddressFromComputer(ComputerDetails computer) {
         return computer.activeAddress;
     }
@@ -74,6 +78,38 @@ public class ServerHelper {
             return;
         }
         parent.startActivity(createStartIntent(parent, app, computer, managerBinder));
+    }
+
+    public static void doNetworkTest(final Activity parent) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                SpinnerDialog spinnerDialog = SpinnerDialog.displayDialog(parent,
+                        parent.getResources().getString(R.string.nettest_title_waiting),
+                        parent.getResources().getString(R.string.nettest_text_waiting),
+                        false);
+
+                int ret = MoonBridge.testClientConnectivity(CONNECTION_TEST_SERVER, 443, MoonBridge.ML_PORT_FLAG_ALL);
+                spinnerDialog.dismiss();
+
+                String dialogSummary;
+                if (ret == MoonBridge.ML_TEST_RESULT_INCONCLUSIVE) {
+                    dialogSummary = parent.getResources().getString(R.string.nettest_text_inconclusive);
+                }
+                else if (ret == 0) {
+                    dialogSummary = parent.getResources().getString(R.string.nettest_text_success);
+                }
+                else {
+                    dialogSummary = parent.getResources().getString(R.string.nettest_text_failure);
+                    dialogSummary += MoonBridge.stringifyPortFlags(ret, "\n");
+                }
+
+                Dialog.displayDialog(parent,
+                        parent.getResources().getString(R.string.nettest_title_done),
+                        dialogSummary,
+                        false);
+            }
+        }).start();
     }
 
     public static void doQuit(final Activity parent,

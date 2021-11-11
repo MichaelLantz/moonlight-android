@@ -23,7 +23,6 @@ public class PreferenceConfiguration {
     private static final String DEADZONE_PREF_STRING = "seekbar_deadzone";
     private static final String OSC_OPACITY_PREF_STRING = "seekbar_osc_opacity";
     private static final String LANGUAGE_PREF_STRING = "list_languages";
-    private static final String LIST_MODE_PREF_STRING = "checkbox_list_mode";
     private static final String SMALL_ICONS_PREF_STRING = "checkbox_small_icon_mode";
     private static final String MULTI_CONTROLLER_PREF_STRING = "checkbox_multi_controller";
     static final String AUDIO_CONFIG_PREF_STRING = "list_audio_config";
@@ -43,8 +42,9 @@ public class PreferenceConfiguration {
     private static final String VIBRATE_FALLBACK_PREF_STRING = "checkbox_vibrate_fallback";
     private static final String FLIP_FACE_BUTTONS_PREF_STRING = "checkbox_flip_face_buttons";
     private static final String TOUCHSCREEN_TRACKPAD_PREF_STRING = "checkbox_touchscreen_trackpad";
+    private static final String LATENCY_TOAST_PREF_STRING = "checkbox_enable_post_stream_toast";
 
-    static final String DEFAULT_RESOLUTION = "720p";
+    static final String DEFAULT_RESOLUTION = "1280x720";
     static final String DEFAULT_FPS = "60";
     private static final boolean DEFAULT_STRETCH = false;
     private static final boolean DEFAULT_SOPS = true;
@@ -53,7 +53,6 @@ public class PreferenceConfiguration {
     private static final int DEFAULT_DEADZONE = 15;
     private static final int DEFAULT_OPACITY = 90;
     public static final String DEFAULT_LANGUAGE = "default";
-    private static final boolean DEFAULT_LIST_MODE = false;
     private static final boolean DEFAULT_MULTI_CONTROLLER = true;
     private static final boolean DEFAULT_USB_DRIVER = true;
     private static final String DEFAULT_VIDEO_FORMAT = "auto";
@@ -72,10 +71,19 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_FLIP_FACE_BUTTONS = false;
     private static final boolean DEFAULT_TOUCHSCREEN_TRACKPAD = true;
     private static final String DEFAULT_AUDIO_CONFIG = "2"; // Stereo
+    private static final boolean DEFAULT_LATENCY_TOAST = false;
 
     public static final int FORCE_H265_ON = -1;
     public static final int AUTOSELECT_H265 = 0;
     public static final int FORCE_H265_OFF = 1;
+
+    public static final String RES_360P = "640x360";
+    public static final String RES_480P = "854x480";
+    public static final String RES_720P = "1280x720";
+    public static final String RES_1080P = "1920x1080";
+    public static final String RES_1440P = "2560x1440";
+    public static final String RES_4K = "3840x2160";
+    public static final String RES_NATIVE = "Native";
 
     public int width, height, fps;
     public int bitrate;
@@ -84,13 +92,14 @@ public class PreferenceConfiguration {
     public int oscOpacity;
     public boolean stretchVideo, enableSops, playHostAudio, disableWarnings;
     public String language;
-    public boolean listMode, smallIconMode, multiController, usbDriver, flipFaceButtons;
+    public boolean smallIconMode, multiController, usbDriver, flipFaceButtons;
     public boolean onscreenController;
     public boolean onlyL3R3;
     public boolean disableFrameDrop;
     public boolean enableHdr;
     public boolean enablePip;
     public boolean enablePerfOverlay;
+    public boolean enableLatencyToast;
     public boolean bindAllUsb;
     public boolean mouseEmulation;
     public boolean mouseNavButtons;
@@ -100,58 +109,78 @@ public class PreferenceConfiguration {
     public boolean touchscreenTrackpad;
     public MoonBridge.AudioConfiguration audioConfiguration;
 
-    private static int getHeightFromResolutionString(String resString) {
+    public static boolean isNativeResolution(int width, int height) {
+        // It's not a native resolution if it matches an existing resolution option
+        if (width == 640 && height == 360) {
+            return false;
+        }
+        else if (width == 854 && height == 480) {
+            return false;
+        }
+        else if (width == 1280 && height == 720) {
+            return false;
+        }
+        else if (width == 1920 && height == 1080) {
+            return false;
+        }
+        else if (width == 2560 && height == 1440) {
+            return false;
+        }
+        else if (width == 3840 && height == 2160) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static String convertFromLegacyResolutionString(String resString) {
         if (resString.equalsIgnoreCase("360p")) {
-            return 360;
+            return RES_360P;
         }
         else if (resString.equalsIgnoreCase("480p")) {
-            return 480;
+            return RES_480P;
         }
         else if (resString.equalsIgnoreCase("720p")) {
-            return 720;
+            return RES_720P;
         }
         else if (resString.equalsIgnoreCase("1080p")) {
-            return 1080;
+            return RES_1080P;
         }
         else if (resString.equalsIgnoreCase("1440p")) {
-            return 1440;
+            return RES_1440P;
         }
         else if (resString.equalsIgnoreCase("4K")) {
-            return 2160;
+            return RES_4K;
         }
         else {
             // Should be unreachable
-            return 720;
+            return RES_720P;
         }
     }
 
     private static int getWidthFromResolutionString(String resString) {
-        int height = getHeightFromResolutionString(resString);
-        if (height == 480) {
-            // This isn't an exact 16:9 resolution
-            return 854;
-        }
-        else {
-            return (height * 16) / 9;
-        }
+        return Integer.parseInt(resString.split("x")[0]);
+    }
+
+    private static int getHeightFromResolutionString(String resString) {
+        return Integer.parseInt(resString.split("x")[1]);
     }
 
     private static String getResolutionString(int width, int height) {
         switch (height) {
             case 360:
-                return "360p";
+                return RES_360P;
             case 480:
-                return "480p";
+                return RES_480P;
             default:
             case 720:
-                return "720p";
+                return RES_720P;
             case 1080:
-                return "1080p";
+                return RES_1080P;
             case 1440:
-                return "1440p";
+                return RES_1440P;
             case 2160:
-                return "4K";
-
+                return RES_4K;
         }
     }
 
@@ -322,9 +351,22 @@ public class PreferenceConfiguration {
         else {
             // Use the new preference location
             String resStr = prefs.getString(RESOLUTION_PREF_STRING, PreferenceConfiguration.DEFAULT_RESOLUTION);
+
+            // Convert legacy resolution strings to the new style
+            if (!resStr.contains("x")) {
+                resStr = PreferenceConfiguration.convertFromLegacyResolutionString(resStr);
+                prefs.edit().putString(RESOLUTION_PREF_STRING, resStr).apply();
+            }
+
             config.width = PreferenceConfiguration.getWidthFromResolutionString(resStr);
             config.height = PreferenceConfiguration.getHeightFromResolutionString(resStr);
             config.fps = Integer.parseInt(prefs.getString(FPS_PREF_STRING, PreferenceConfiguration.DEFAULT_FPS));
+        }
+
+        if (!prefs.contains(SMALL_ICONS_PREF_STRING)) {
+            // We need to write small icon mode's default to disk for the settings page to display
+            // the current state of the option properly
+            prefs.edit().putBoolean(SMALL_ICONS_PREF_STRING, getDefaultSmallMode(context)).apply();
         }
 
         // This must happen after the preferences migration to ensure the preferences are populated
@@ -357,7 +399,6 @@ public class PreferenceConfiguration {
         config.enableSops = prefs.getBoolean(SOPS_PREF_STRING, DEFAULT_SOPS);
         config.stretchVideo = prefs.getBoolean(STRETCH_PREF_STRING, DEFAULT_STRETCH);
         config.playHostAudio = prefs.getBoolean(HOST_AUDIO_PREF_STRING, DEFAULT_HOST_AUDIO);
-        config.listMode = prefs.getBoolean(LIST_MODE_PREF_STRING, DEFAULT_LIST_MODE);
         config.smallIconMode = prefs.getBoolean(SMALL_ICONS_PREF_STRING, getDefaultSmallMode(context));
         config.multiController = prefs.getBoolean(MULTI_CONTROLLER_PREF_STRING, DEFAULT_MULTI_CONTROLLER);
         config.usbDriver = prefs.getBoolean(USB_DRIVER_PREF_SRING, DEFAULT_USB_DRIVER);
@@ -375,6 +416,7 @@ public class PreferenceConfiguration {
         config.vibrateFallbackToDevice = prefs.getBoolean(VIBRATE_FALLBACK_PREF_STRING, DEFAULT_VIBRATE_FALLBACK);
         config.flipFaceButtons = prefs.getBoolean(FLIP_FACE_BUTTONS_PREF_STRING, DEFAULT_FLIP_FACE_BUTTONS);
         config.touchscreenTrackpad = prefs.getBoolean(TOUCHSCREEN_TRACKPAD_PREF_STRING, DEFAULT_TOUCHSCREEN_TRACKPAD);
+        config.enableLatencyToast = prefs.getBoolean(LATENCY_TOAST_PREF_STRING, DEFAULT_LATENCY_TOAST);
 
         return config;
     }

@@ -1,5 +1,6 @@
 package com.limelight.binding.input;
 
+import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
 import android.hardware.input.InputManager;
@@ -7,9 +8,11 @@ import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
 import android.media.AudioAttributes;
 import android.os.Build;
+import android.os.CombinedVibration;
 import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.util.SparseArray;
 import android.view.InputDevice;
 import android.view.InputEvent;
@@ -107,6 +110,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         defaultContext.rightStickDeadzoneRadius = (float) stickDeadzone;
         defaultContext.leftTriggerAxis = MotionEvent.AXIS_BRAKE;
         defaultContext.rightTriggerAxis = MotionEvent.AXIS_GAS;
+        defaultContext.hatXAxis = MotionEvent.AXIS_HAT_X;
+        defaultContext.hatYAxis = MotionEvent.AXIS_HAT_Y;
         defaultContext.controllerNumber = (short) 0;
         defaultContext.assignedControllerNumber = true;
         defaultContext.external = false;
@@ -153,11 +158,36 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
     }
 
+    // This can happen when gaining/losing input focus with some devices.
+    // Input devices that have a trackpad may gain/lose AXIS_RELATIVE_X/Y.
     @Override
     public void onInputDeviceChanged(int deviceId) {
-        // Remove and re-add 
-        onInputDeviceRemoved(deviceId);
-        onInputDeviceAdded(deviceId);
+        InputDevice device = InputDevice.getDevice(deviceId);
+        if (device == null) {
+            return;
+        }
+
+        // If we don't have a context for this device, we don't need to update anything
+        InputDeviceContext existingContext = inputDeviceContexts.get(deviceId);
+        if (existingContext == null) {
+            return;
+        }
+
+        LimeLog.info("Device changed: "+existingContext.name+" ("+deviceId+")");
+
+        // Don't release the controller number, because we will carry it over if it is present.
+        // We also want to make sure the change is invisible to the host PC to avoid an add/remove
+        // cycle for the gamepad which may break some games.
+        existingContext.destroy();
+
+        InputDeviceContext newContext = createInputDeviceContextForDevice(device);
+
+        // Copy over existing controller number state
+        newContext.assignedControllerNumber = existingContext.assignedControllerNumber;
+        newContext.reservedControllerNumber = existingContext.reservedControllerNumber;
+        newContext.controllerNumber = existingContext.controllerNumber;
+
+        inputDeviceContexts.put(deviceId, newContext);
     }
 
     public void stop() {
@@ -192,6 +222,28 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         if (hasJoystickAxes(device) || hasGamepadButtons(device)) {
             // Has real joystick axes or gamepad buttons
             return true;
+        }
+
+        // HACK for https://issuetracker.google.com/issues/163120692
+        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.R) {
+            if (device.getId() == -1) {
+                // This "virtual" device could be input from any of the attached devices.
+                // Look to see if any gamepads are connected.
+                int[] ids = InputDevice.getDeviceIds();
+                for (int id : ids) {
+                    InputDevice dev = InputDevice.getDevice(id);
+                    if (dev == null) {
+                        // This device was removed during enumeration
+                        continue;
+                    }
+
+                    // If there are any gamepad devices connected, we'll
+                    // report that this virtual device is a gamepad.
+                    if (hasJoystickAxes(dev) || hasGamepadButtons(dev)) {
+                        return true;
+                    }
+                }
+            }
         }
 
         // Otherwise, we'll try anything that claims to be a non-alphabetic keyboard
@@ -463,8 +515,19 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             context.productId = dev.getProductId();
         }
 
-        if (dev.getVibrator().hasVibrator()) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasDualAmplitudeControlledRumbleVibrators(dev.getVibratorManager())) {
+            context.vibratorManager = dev.getVibratorManager();
+        }
+        else if (dev.getVibrator().hasVibrator()) {
             context.vibrator = dev.getVibrator();
+        }
+
+        // Detect if the gamepad has Mode and Select buttons according to the Android key layouts.
+        // We do this first because other codepaths below may override these defaults.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            boolean[] buttons = dev.hasKeys(KeyEvent.KEYCODE_BUTTON_MODE, KeyEvent.KEYCODE_BUTTON_SELECT, KeyEvent.KEYCODE_BACK, 0);
+            context.hasMode = buttons[0];
+            context.hasSelect = buttons[1] || buttons[2];
         }
 
         context.leftStickXAxis = MotionEvent.AXIS_X;
@@ -525,6 +588,10 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                     // The old DS4 driver uses RX and RY for triggers
                     context.leftTriggerAxis = MotionEvent.AXIS_RX;
                     context.rightTriggerAxis = MotionEvent.AXIS_RY;
+
+                    // DS4 has Select and Mode buttons (possibly mapped non-standard)
+                    context.hasSelect = true;
+                    context.hasMode = true;
                 }
                 else {
                     // If it's not a non-standard DS4 controller, it's probably an Xbox controller or
@@ -606,6 +673,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 context.backIsStart = true;
                 context.modeIsSelect = true;
                 context.triggerDeadzone = 0.30f;
+                context.hasSelect = true;
+                context.hasMode = false;
             }
         }
 
@@ -623,6 +692,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                     if (!hasStartKey[0] && !hasStartKey[1]) {
                         context.backIsStart = true;
                         context.modeIsSelect = true;
+                        context.hasSelect = true;
+                        context.hasMode = false;
                     }
                 }
 
@@ -631,14 +702,26 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 context.triggerDeadzone = 0.30f;
             }
             // SHIELD controllers will use small stick deadzones
-            else if (devName.contains("SHIELD")) {
+            else if (devName.contains("SHIELD") || devName.contains("NVIDIA Controller")) {
                 context.leftStickDeadzoneRadius = 0.07f;
                 context.rightStickDeadzoneRadius = 0.07f;
+
+                // The big Nvidia button on the Shield controllers acts like a Search button. It
+                // summons the Google Assistant on the Shield TV. On my Pixel 4, it seems to do
+                // nothing, so we can hijack it to act like a mode button.
+                if (devName.contains("NVIDIA Controller v01.03") || devName.contains("NVIDIA Controller v01.04")) {
+                    context.searchIsMode = true;
+                    context.hasMode = true;
+                }
             }
             // The Serval has a couple of unknown buttons that are start and select. It also has
             // a back button which we want to ignore since there's already a select button.
             else if (devName.contains("Razer Serval")) {
                 context.isServal = true;
+
+                // Serval has Select and Mode buttons (possibly mapped non-standard)
+                context.hasMode = true;
+                context.hasSelect = true;
             }
             // The Xbox One S Bluetooth controller has some mappings that need fixing up.
             // However, Microsoft released a firmware update with no change to VID/PID
@@ -649,6 +732,10 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             else if (devName.equals("Xbox Wireless Controller")) {
                 if (gasRange == null) {
                     context.isNonStandardXboxBtController = true;
+
+                    // Xbox One S has Select and Mode buttons (possibly mapped non-standard)
+                    context.hasMode = true;
+                    context.hasSelect = true;
                 }
             }
         }
@@ -669,6 +756,13 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             // input device has been destroyed. In this case we'll see a
             // != 0 device ID but no device attached.
             return null;
+        }
+
+        // HACK for https://issuetracker.google.com/issues/163120692
+        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.R) {
+            if (event.getDeviceId() == -1) {
+                return defaultContext;
+            }
         }
 
         // Return the existing context if it exists
@@ -832,6 +926,41 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             return KeyEvent.KEYCODE_BUTTON_MODE;
         }
 
+        // This mapping was adding in Android 10, then changed based on
+        // kernel changes (adding hid-nintendo) in Android 11. If we're
+        // on anything newer than Pie, just use the built-in mapping.
+        if ((context.vendorId == 0x057e && context.productId == 0x2009 && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) || // Switch Pro controller
+                (context.vendorId == 0x0f0d && context.productId == 0x00c1)) { // HORIPAD for Switch
+            switch (event.getScanCode()) {
+                case 0x130:
+                    return KeyEvent.KEYCODE_BUTTON_A;
+                case 0x131:
+                    return KeyEvent.KEYCODE_BUTTON_B;
+                case 0x132:
+                    return KeyEvent.KEYCODE_BUTTON_X;
+                case 0x133:
+                    return KeyEvent.KEYCODE_BUTTON_Y;
+                case 0x134:
+                    return KeyEvent.KEYCODE_BUTTON_L1;
+                case 0x135:
+                    return KeyEvent.KEYCODE_BUTTON_R1;
+                case 0x136:
+                    return KeyEvent.KEYCODE_BUTTON_L2;
+                case 0x137:
+                    return KeyEvent.KEYCODE_BUTTON_R2;
+                case 0x138:
+                    return KeyEvent.KEYCODE_BUTTON_SELECT;
+                case 0x139:
+                    return KeyEvent.KEYCODE_BUTTON_START;
+                case 0x13A:
+                    return KeyEvent.KEYCODE_BUTTON_THUMBL;
+                case 0x13B:
+                    return KeyEvent.KEYCODE_BUTTON_THUMBR;
+                case 0x13D:
+                    return KeyEvent.KEYCODE_BUTTON_MODE;
+            }
+        }
+
         if (context.usesLinuxGamepadStandardFaceButtons) {
             // Android's Generic.kl swaps BTN_NORTH and BTN_WEST
             switch (event.getScanCode()) {
@@ -991,6 +1120,10 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         else if (context.modeIsSelect && keyCode == KeyEvent.KEYCODE_BUTTON_MODE) {
             // Emulate the select button with mode
             return KeyEvent.KEYCODE_BUTTON_SELECT;
+        }
+        else if (context.searchIsMode && keyCode == KeyEvent.KEYCODE_SEARCH) {
+            // Emulate the mode button with search
+            return KeyEvent.KEYCODE_BUTTON_MODE;
         }
 
         return keyCode;
@@ -1181,7 +1314,58 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
     }
 
-    private void rumbleVibrator(Vibrator vibrator, short lowFreqMotor, short highFreqMotor) {
+    @TargetApi(31)
+    private boolean hasDualAmplitudeControlledRumbleVibrators(VibratorManager vm) {
+        int[] vibratorIds = vm.getVibratorIds();
+
+        // There must be exactly 2 vibrators on this device
+        if (vibratorIds.length != 2) {
+            return false;
+        }
+
+        // Both vibrators must have amplitude control
+        for (int vid : vibratorIds) {
+            if (!vm.getVibrator(vid).hasAmplitudeControl()) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // This must only be called if hasDualAmplitudeControlledRumbleVibrators() is true!
+    @TargetApi(31)
+    private void rumbleDualVibrators(VibratorManager vm, short lowFreqMotor, short highFreqMotor) {
+        // Normalize motor values to 0-255 amplitudes for VibrationManager
+        highFreqMotor = (short)((highFreqMotor >> 8) & 0xFF);
+        lowFreqMotor = (short)((lowFreqMotor >> 8) & 0xFF);
+
+        // If they're both zero, we can just call cancel().
+        if (lowFreqMotor == 0 && highFreqMotor == 0) {
+            vm.cancel();
+            return;
+        }
+
+        // There's no documentation that states that vibrators for FF_RUMBLE input devices will
+        // always be enumerated in this order, but it seems consistent between Xbox Series X (USB),
+        // PS3 (USB), and PS4 (USB+BT) controllers on Android 12 Beta 3.
+        int[] vibratorIds = vm.getVibratorIds();
+        int[] vibratorAmplitudes = new int[] { highFreqMotor, lowFreqMotor };
+
+        CombinedVibration.ParallelCombination combo = CombinedVibration.startParallel();
+
+        for (int i = 0; i < vibratorIds.length; i++) {
+            // It's illegal to create a VibrationEffect with an amplitude of 0.
+            // Simply excluding that vibrator from our ParallelCombination will turn it off.
+            if (vibratorAmplitudes[i] != 0) {
+                combo.addVibrator(vibratorIds[i], VibrationEffect.createOneShot(60000, vibratorAmplitudes[i]));
+            }
+        }
+
+        vm.vibrate(combo.combine());
+    }
+
+    private void rumbleSingleVibrator(Vibrator vibrator, short lowFreqMotor, short highFreqMotor) {
         // Since we can only use a single amplitude value, compute the desired amplitude
         // by taking 80% of the big motor and 33% of the small motor, then capping to 255.
         // NB: This value is now 0-255 as required by VibrationEffect.
@@ -1237,9 +1421,13 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             if (deviceContext.controllerNumber == controllerNumber) {
                 foundMatchingDevice = true;
 
-                if (deviceContext.vibrator != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && deviceContext.vibratorManager != null) {
                     vibrated = true;
-                    rumbleVibrator(deviceContext.vibrator, lowFreqMotor, highFreqMotor);
+                    rumbleDualVibrators(deviceContext.vibratorManager, lowFreqMotor, highFreqMotor);
+                }
+                else if (deviceContext.vibrator != null) {
+                    vibrated = true;
+                    rumbleSingleVibrator(deviceContext.vibrator, lowFreqMotor, highFreqMotor);
                 }
             }
         }
@@ -1259,12 +1447,12 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             // controls that triggered the rumble. Vibrate the device if
             // the user has requested that behavior.
             if (!foundMatchingDevice && prefConfig.onscreenController && !prefConfig.onlyL3R3 && prefConfig.vibrateOsc) {
-                rumbleVibrator(deviceVibrator, lowFreqMotor, highFreqMotor);
+                rumbleSingleVibrator(deviceVibrator, lowFreqMotor, highFreqMotor);
             }
             else if (foundMatchingDevice && !vibrated && prefConfig.vibrateFallbackToDevice) {
                 // We found a device to vibrate but it didn't have rumble support. The user
                 // has requested us to vibrate the device in this case.
-                rumbleVibrator(deviceVibrator, lowFreqMotor, highFreqMotor);
+                rumbleSingleVibrator(deviceVibrator, lowFreqMotor, highFreqMotor);
             }
         }
     }
@@ -1453,6 +1641,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         switch (keyCode) {
         case KeyEvent.KEYCODE_BUTTON_MODE:
+            context.hasMode = true;
             context.inputMap |= ControllerPacket.SPECIAL_BUTTON_FLAG;
             break;
         case KeyEvent.KEYCODE_BUTTON_START:
@@ -1464,6 +1653,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             break;
         case KeyEvent.KEYCODE_BACK:
         case KeyEvent.KEYCODE_BUTTON_SELECT:
+            context.hasSelect = true;
             context.inputMap |= ControllerPacket.BACK_FLAG;
             break;
         case KeyEvent.KEYCODE_DPAD_LEFT:
@@ -1545,26 +1735,40 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
 
         // Start+LB acts like select for controllers with one button
-        if (context.inputMap == (ControllerPacket.PLAY_FLAG | ControllerPacket.LB_FLAG) ||
-            (context.inputMap == ControllerPacket.PLAY_FLAG &&
-              SystemClock.uptimeMillis() - context.lastLbUpTime <= MAXIMUM_BUMPER_UP_DELAY_MS))
-        {
-            context.inputMap &= ~(ControllerPacket.PLAY_FLAG | ControllerPacket.LB_FLAG);
-            context.inputMap |= ControllerPacket.BACK_FLAG;
+        if (!context.hasSelect) {
+            if (context.inputMap == (ControllerPacket.PLAY_FLAG | ControllerPacket.LB_FLAG) ||
+                    (context.inputMap == ControllerPacket.PLAY_FLAG &&
+                            SystemClock.uptimeMillis() - context.lastLbUpTime <= MAXIMUM_BUMPER_UP_DELAY_MS))
+            {
+                context.inputMap &= ~(ControllerPacket.PLAY_FLAG | ControllerPacket.LB_FLAG);
+                context.inputMap |= ControllerPacket.BACK_FLAG;
 
-            context.emulatingButtonFlags |= ControllerHandler.EMULATING_SELECT;
+                context.emulatingButtonFlags |= ControllerHandler.EMULATING_SELECT;
+            }
         }
 
-        // We detect select+start or start+RB as the special button combo
-        if (context.inputMap == (ControllerPacket.PLAY_FLAG | ControllerPacket.BACK_FLAG) ||
-            context.inputMap == (ControllerPacket.PLAY_FLAG | ControllerPacket.RB_FLAG) ||
-                (context.inputMap == ControllerPacket.PLAY_FLAG &&
-                        SystemClock.uptimeMillis() - context.lastRbUpTime <= MAXIMUM_BUMPER_UP_DELAY_MS))
-        {
-            context.inputMap &= ~(ControllerPacket.BACK_FLAG | ControllerPacket.PLAY_FLAG | ControllerPacket.RB_FLAG);
-            context.inputMap |= ControllerPacket.SPECIAL_BUTTON_FLAG;
+        // If there is a physical select button, we'll use Start+Select as the special button combo
+        // otherwise we'll use Start+RB.
+        if (!context.hasMode) {
+            if (context.hasSelect) {
+                if (context.inputMap == (ControllerPacket.PLAY_FLAG | ControllerPacket.BACK_FLAG)) {
+                    context.inputMap &= ~(ControllerPacket.PLAY_FLAG | ControllerPacket.BACK_FLAG);
+                    context.inputMap |= ControllerPacket.SPECIAL_BUTTON_FLAG;
 
-            context.emulatingButtonFlags |= ControllerHandler.EMULATING_SPECIAL;
+                    context.emulatingButtonFlags |= ControllerHandler.EMULATING_SPECIAL;
+                }
+            }
+            else {
+                if (context.inputMap == (ControllerPacket.PLAY_FLAG | ControllerPacket.RB_FLAG) ||
+                        (context.inputMap == ControllerPacket.PLAY_FLAG &&
+                                SystemClock.uptimeMillis() - context.lastRbUpTime <= MAXIMUM_BUMPER_UP_DELAY_MS))
+                {
+                    context.inputMap &= ~(ControllerPacket.PLAY_FLAG | ControllerPacket.RB_FLAG);
+                    context.inputMap |= ControllerPacket.SPECIAL_BUTTON_FLAG;
+
+                    context.emulatingButtonFlags |= ControllerHandler.EMULATING_SPECIAL;
+                }
+            }
         }
 
         // We don't need to send repeat key down events, but the platform
@@ -1648,7 +1852,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         usbDeviceContexts.put(controller.getControllerId(), context);
     }
 
-    class GenericControllerContext {
+    static class GenericControllerContext {
         public int id;
         public boolean external;
 
@@ -1685,6 +1889,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
     class InputDeviceContext extends GenericControllerContext {
         public String name;
+        public VibratorManager vibratorManager;
         public Vibrator vibrator;
 
         public int leftStickXAxis = -1;
@@ -1708,11 +1913,14 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         public boolean isServal;
         public boolean backIsStart;
         public boolean modeIsSelect;
+        public boolean searchIsMode;
         public boolean ignoreBack;
         public boolean hasJoystickAxes;
         public boolean pendingExit;
 
         public int emulatingButtonFlags = 0;
+        public boolean hasSelect;
+        public boolean hasMode;
 
         // Used for OUYA bumper state tracking since they force all buttons
         // up when the OUYA button goes down. We watch the last time we get
@@ -1728,7 +1936,10 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         public void destroy() {
             super.destroy();
 
-            if (vibrator != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && vibratorManager != null) {
+                vibratorManager.cancel();
+            }
+            else if (vibrator != null) {
                 vibrator.cancel();
             }
         }

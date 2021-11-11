@@ -1,37 +1,50 @@
 package com.limelight.preferences;
 
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.media.MediaCodecInfo;
 import android.os.Build;
 import android.os.Bundle;
 import com.vuzix.hud.actionmenu.ActionMenuActivity;
 import android.os.Handler;
+import android.os.Vibrator;
 import android.preference.ListPreference;
 import android.preference.Preference;
 import android.preference.PreferenceCategory;
 import android.preference.PreferenceFragment;
 import android.preference.PreferenceManager;
 import android.preference.PreferenceScreen;
+import android.util.DisplayMetrics;
 import android.util.Range;
 import android.view.Display;
+import android.view.DisplayCutout;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 
 import com.limelight.LimeLog;
 import com.limelight.PcView;
 import com.limelight.R;
 import com.limelight.binding.video.MediaCodecHelper;
+import com.limelight.utils.Dialog;
 import com.limelight.utils.UiHelper;
+
+import java.lang.reflect.Method;
+import java.util.Arrays;
 
 public class StreamSettings extends ActionMenuActivity {
     private PreferenceConfiguration previousPrefs;
 
+    // HACK for Android 9
+    static DisplayCutout displayCutoutP;
+
     void reloadSettings() {
         getFragmentManager().beginTransaction().replace(
                 R.id.stream_settings, new SettingsFragment()
-        ).commit();
+        ).commitAllowingStateLoss();
     }
 
     @Override
@@ -43,9 +56,26 @@ public class StreamSettings extends ActionMenuActivity {
         UiHelper.setLocale(this);
 
         setContentView(R.layout.activity_stream_settings);
-        reloadSettings();
 
         UiHelper.notifyNewRootView(this);
+    }
+
+    @Override
+    public void onAttachedToWindow() {
+        super.onAttachedToWindow();
+
+        // We have to use this hack on Android 9 because we don't have Display.getCutout()
+        // which was added in Android 10.
+        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.P) {
+            // Insets can be null when the activity is recreated on screen rotation
+            // https://stackoverflow.com/questions/61241255/windowinsets-getdisplaycutout-is-null-everywhere-except-within-onattachedtowindo
+            WindowInsets insets = getWindow().getDecorView().getRootWindowInsets();
+            if (insets != null) {
+                displayCutoutP = insets.getDisplayCutout();
+            }
+        }
+
+        reloadSettings();
     }
 
     @Override
@@ -54,9 +84,7 @@ public class StreamSettings extends ActionMenuActivity {
 
         // Check for changes that require a UI reload to take effect
         PreferenceConfiguration newPrefs = PreferenceConfiguration.readPreferences(this);
-        if (newPrefs.listMode != previousPrefs.listMode ||
-                newPrefs.smallIconMode != previousPrefs.smallIconMode ||
-                !newPrefs.language.equals(previousPrefs.language)) {
+        if (!newPrefs.language.equals(previousPrefs.language)) {
             // Restart the PC view to apply UI changes
             Intent intent = new Intent(this, PcView.class);
             intent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -65,11 +93,53 @@ public class StreamSettings extends ActionMenuActivity {
     }
 
     public static class SettingsFragment extends PreferenceFragment {
+        private int nativeResolutionStartIndex = Integer.MAX_VALUE;
 
         private void setValue(String preferenceKey, String value) {
             ListPreference pref = (ListPreference) findPreference(preferenceKey);
 
             pref.setValue(value);
+        }
+
+        private void addNativeResolutionEntry(int nativeWidth, int nativeHeight, boolean insetsRemoved) {
+            ListPreference pref = (ListPreference) findPreference(PreferenceConfiguration.RESOLUTION_PREF_STRING);
+
+            String newName;
+
+            if (insetsRemoved) {
+                newName = getResources().getString(R.string.resolution_prefix_native_fullscreen);
+            }
+            else {
+                newName = getResources().getString(R.string.resolution_prefix_native);
+            }
+
+            newName += " ("+nativeWidth+"x"+nativeHeight+")";
+
+            String newValue = nativeWidth+"x"+nativeHeight;
+
+            CharSequence[] values = pref.getEntryValues();
+
+            // Check if the native resolution is already present
+            for (CharSequence value : values) {
+                if (newValue.equals(value.toString())) {
+                    // It is present in the default list, so don't add it again
+                    return;
+                }
+            }
+
+            CharSequence[] newEntries = Arrays.copyOf(pref.getEntries(), pref.getEntries().length + 1);
+            CharSequence[] newValues = Arrays.copyOf(values, values.length + 1);
+
+            // Add the new native option
+            newEntries[newEntries.length - 1] = newName;
+            newValues[newValues.length - 1] = newValue;
+
+            pref.setEntries(newEntries);
+            pref.setEntryValues(newValues);
+
+            if (newValues.length - 1 < nativeResolutionStartIndex) {
+                nativeResolutionStartIndex = newValues.length - 1;
+            }
         }
 
         private void removeValue(String preferenceKey, String value, Runnable onMatched) {
@@ -108,8 +178,6 @@ public class StreamSettings extends ActionMenuActivity {
             pref.setEntryValues(entryValues);
         }
 
-
-
         private void resetBitrateToDefault(SharedPreferences prefs, String res, String fps) {
             if (res == null) {
                 res = prefs.getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, PreferenceConfiguration.DEFAULT_RESOLUTION);
@@ -140,7 +208,7 @@ public class StreamSettings extends ActionMenuActivity {
 
             // hide on-screen controls category on non touch screen devices
             if (!getActivity().getPackageManager().
-                    hasSystemFeature("android.hardware.touchscreen")) {
+                    hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)) {
                 {
                     PreferenceCategory category =
                             (PreferenceCategory) findPreference("category_onscreen_controls");
@@ -154,11 +222,27 @@ public class StreamSettings extends ActionMenuActivity {
                 }
             }
 
-            // Remove PiP mode on devices pre-Oreo
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            // Remove PiP mode on devices pre-Oreo, where the feature is not available (some low RAM devices),
+            // and on Fire OS where it violates the Amazon App Store guidelines for some reason.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+                    !getActivity().getPackageManager().hasSystemFeature("android.software.picture_in_picture") ||
+                    getActivity().getPackageManager().hasSystemFeature("com.amazon.software.fireos")) {
                 PreferenceCategory category =
-                        (PreferenceCategory) findPreference("category_basic_settings");
+                        (PreferenceCategory) findPreference("category_ui_settings");
                 category.removePreference(findPreference("checkbox_enable_pip"));
+            }
+
+            // Remove the vibration options if the device can't vibrate
+            if (!((Vibrator)getActivity().getSystemService(Context.VIBRATOR_SERVICE)).hasVibrator()) {
+                PreferenceCategory category =
+                        (PreferenceCategory) findPreference("category_input_settings");
+                category.removePreference(findPreference("checkbox_vibrate_fallback"));
+
+                // The entire OSC category may have already been removed by the touchscreen check above
+                category = (PreferenceCategory) findPreference("category_onscreen_controls");
+                if (category != null) {
+                    category.removePreference(findPreference("checkbox_vibrate_osc"));
+                }
             }
 
             int maxSupportedFps = 0;
@@ -168,6 +252,38 @@ public class StreamSettings extends ActionMenuActivity {
                 Display display = getActivity().getWindowManager().getDefaultDisplay();
 
                 int maxSupportedResW = 0;
+
+                // Add a native resolution with any insets included for users that don't want content
+                // behind the notch of their display
+                boolean hasInsets = false;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    DisplayCutout cutout;
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        // Use the much nicer Display.getCutout() API on Android 10+
+                        cutout = display.getCutout();
+                    }
+                    else {
+                        // Android 9 only
+                        cutout = displayCutoutP;
+                    }
+
+                    if (cutout != null) {
+                        int widthInsets = cutout.getSafeInsetLeft() + cutout.getSafeInsetRight();
+                        int heightInsets = cutout.getSafeInsetBottom() + cutout.getSafeInsetTop();
+
+                        if (widthInsets != 0 || heightInsets != 0) {
+                            DisplayMetrics metrics = new DisplayMetrics();
+                            display.getRealMetrics(metrics);
+
+                            int width = Math.max(metrics.widthPixels - widthInsets, metrics.heightPixels - heightInsets);
+                            int height = Math.min(metrics.widthPixels - widthInsets, metrics.heightPixels - heightInsets);
+
+                            addNativeResolutionEntry(width, height, false);
+                            hasInsets = true;
+                        }
+                    }
+                }
 
                 // Always allow resolutions that are smaller or equal to the active
                 // display resolution because decoders can report total non-sense to us.
@@ -183,6 +299,13 @@ public class StreamSettings extends ActionMenuActivity {
 
                     int width = Math.max(candidate.getPhysicalWidth(), candidate.getPhysicalHeight());
                     int height = Math.min(candidate.getPhysicalWidth(), candidate.getPhysicalHeight());
+
+                    // Some TVs report strange values here, so let's avoid native resolutions on a TV
+                    // unless they report greater than 4K resolutions.
+                    if (!getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_TELEVISION) ||
+                            (width > 3840 || height > 2160)) {
+                        addNativeResolutionEntry(width, height, hasInsets);
+                    }
 
                     if ((width >= 3840 || height >= 2160) && maxSupportedResW < 3840) {
                         maxSupportedResW = 3840;
@@ -249,38 +372,62 @@ public class StreamSettings extends ActionMenuActivity {
                 if (maxSupportedResW != 0) {
                     if (maxSupportedResW < 3840) {
                         // 4K is unsupported
-                        removeValue(PreferenceConfiguration.RESOLUTION_PREF_STRING, "4K", new Runnable() {
+                        removeValue(PreferenceConfiguration.RESOLUTION_PREF_STRING, PreferenceConfiguration.RES_4K, new Runnable() {
                             @Override
                             public void run() {
                                 SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(SettingsFragment.this.getActivity());
-                                setValue(PreferenceConfiguration.RESOLUTION_PREF_STRING, "1440p");
+                                setValue(PreferenceConfiguration.RESOLUTION_PREF_STRING, PreferenceConfiguration.RES_1440P);
                                 resetBitrateToDefault(prefs, null, null);
                             }
                         });
                     }
                     if (maxSupportedResW < 2560) {
                         // 1440p is unsupported
-                        removeValue(PreferenceConfiguration.RESOLUTION_PREF_STRING, "1440p", new Runnable() {
+                        removeValue(PreferenceConfiguration.RESOLUTION_PREF_STRING, PreferenceConfiguration.RES_1440P, new Runnable() {
                             @Override
                             public void run() {
                                 SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(SettingsFragment.this.getActivity());
-                                setValue(PreferenceConfiguration.RESOLUTION_PREF_STRING, "1080p");
+                                setValue(PreferenceConfiguration.RESOLUTION_PREF_STRING, PreferenceConfiguration.RES_1080P);
                                 resetBitrateToDefault(prefs, null, null);
                             }
                         });
                     }
                     if (maxSupportedResW < 1920) {
                         // 1080p is unsupported
-                        removeValue(PreferenceConfiguration.RESOLUTION_PREF_STRING, "1080p", new Runnable() {
+                        removeValue(PreferenceConfiguration.RESOLUTION_PREF_STRING, PreferenceConfiguration.RES_1080P, new Runnable() {
                             @Override
                             public void run() {
                                 SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(SettingsFragment.this.getActivity());
-                                setValue(PreferenceConfiguration.RESOLUTION_PREF_STRING, "720p");
+                                setValue(PreferenceConfiguration.RESOLUTION_PREF_STRING, PreferenceConfiguration.RES_720P);
                                 resetBitrateToDefault(prefs, null, null);
                             }
                         });
                     }
                     // Never remove 720p
+                }
+            }
+            else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                // On Android 4.2 and later, we can get the true metrics via the
+                // getRealMetrics() function (unlike the lies that getWidth() and getHeight()
+                // tell to us).
+                DisplayMetrics metrics = new DisplayMetrics();
+                getActivity().getWindowManager().getDefaultDisplay().getRealMetrics(metrics);
+                int width = Math.max(metrics.widthPixels, metrics.heightPixels);
+                int height = Math.min(metrics.widthPixels, metrics.heightPixels);
+                addNativeResolutionEntry(width, height, false);
+            }
+            else {
+                // On Android 4.1, we have to resort to reflection to invoke hidden APIs
+                // to get the real screen dimensions.
+                Display display = getActivity().getWindowManager().getDefaultDisplay();
+                try {
+                    Method getRawHeightFunc = Display.class.getMethod("getRawHeight");
+                    Method getRawWidthFunc = Display.class.getMethod("getRawWidth");
+                    int width = (Integer) getRawWidthFunc.invoke(display);
+                    int height = (Integer) getRawHeightFunc.invoke(display);
+                    addNativeResolutionEntry(Math.max(width, height), Math.min(width, height), false);
+                } catch (Exception e) {
+                    e.printStackTrace();
                 }
             }
 
@@ -327,7 +474,7 @@ public class StreamSettings extends ActionMenuActivity {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
                 LimeLog.info("Excluding unlock FPS toggle based on OS");
                 PreferenceCategory category =
-                        (PreferenceCategory) findPreference("category_basic_settings");
+                        (PreferenceCategory) findPreference("category_advanced_settings");
                 category.removePreference(findPreference("checkbox_unlock_fps"));
             }
             else {
@@ -391,6 +538,25 @@ public class StreamSettings extends ActionMenuActivity {
                 public boolean onPreferenceChange(Preference preference, Object newValue) {
                     SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(SettingsFragment.this.getActivity());
                     String valueStr = (String) newValue;
+
+                    // Detect if this value is the native resolution option
+                    CharSequence[] values = ((ListPreference)preference).getEntryValues();
+                    boolean isNativeRes = true;
+                    for (int i = 0; i < values.length; i++) {
+                        // Look for a match prior to the start of the native resolution entries
+                        if (valueStr.equals(values[i].toString()) && i < nativeResolutionStartIndex) {
+                            isNativeRes = false;
+                            break;
+                        }
+                    }
+
+                    // If this is native resolution, show the warning dialog
+                    if (isNativeRes) {
+                        Dialog.displayDialog(getActivity(),
+                                getResources().getString(R.string.title_native_res_dialog),
+                                getResources().getString(R.string.text_native_res_dialog),
+                                false);
+                    }
 
                     // Write the new bitrate value
                     resetBitrateToDefault(prefs, valueStr, null);

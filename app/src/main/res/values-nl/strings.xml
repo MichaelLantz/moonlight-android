@@ -88,7 +88,6 @@
   <string name="summary_resolution_list">Te hoge instellingen kunnen crashes en haperingen veroorzaken.</string>
   <string name="title_seekbar_bitrate">Selecteer doel video bitsnelheid</string>
   <string name="summary_seekbar_bitrate">Verlaag bitsnelheid om haperingen te verminderen. Verhoog de bitsnelheid voor een betere videokwaliteit.</string>
-  <string name="suffix_seekbar_bitrate">Kbps</string>
   <string name="title_checkbox_stretch_video">Rek video uit tot volledig scherm</string>
   <string name="title_checkbox_disable_warnings">Verberg waarschuwingsberichten</string>
   <string name="summary_checkbox_disable_warnings">Verberg on-screen verbindingswaarschuwingen tijdens het streamen</string>
@@ -109,8 +108,6 @@
   <string name="category_ui_settings">UI Installingen</string>
   <string name="title_language_list">Taal</string>
   <string name="summary_language_list">Taal te gebruiken in Moonlight</string>
-  <string name="title_checkbox_list_mode">Gebruik lijsten in plaats van kolommen</string>
-  <string name="summary_checkbox_list_mode">Display apps and PCs in lists instead of grids</string>
   <string name="title_checkbox_small_icon_mode">Gebruik kleine iconen</string>
   <string name="summary_checkbox_small_icon_mode">Gebruik kleine iconen in kolom onderdelen zodat meer items tegelijk zichtbaar worden.</string>
 
@@ -121,8 +118,8 @@
   <string name="summary_checkbox_host_audio">Speel audio af op de computer en op dit apparaat</string>
 
   <string name="category_advanced_settings">Geavanceerde Instellingen</string>
-  <string name="title_video_format">Verander H.265 instellingen</string>
-  <string name="summary_video_format">H.265 verlaagt video bandbreedte vereisten maar benodigdt een recent apparaat.</string>
+  <string name="title_video_format">Verander HEVC instellingen</string>
+  <string name="summary_video_format">HEVC verlaagt video bandbreedte vereisten maar benodigdt een recent apparaat.</string>
     <string name="suffix_osc_opacity">%</string>
 
 </resources>

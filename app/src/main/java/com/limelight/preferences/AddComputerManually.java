@@ -15,7 +15,9 @@ import com.limelight.computers.ComputerManagerService;
 import com.limelight.R;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.NvHTTP;
+import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.utils.Dialog;
+import com.limelight.utils.ServerHelper;
 import com.limelight.utils.SpinnerDialog;
 import com.limelight.utils.UiHelper;
 
@@ -86,10 +88,10 @@ public class AddComputerManually extends Activity {
 
             // Couldn't find a matching interface
             return true;
-        } catch (SocketException e) {
+        } catch (Exception e) {
+            // Catch all exceptions because some broken Android devices
+            // will throw an NPE from inside getNetworkInterfaces().
             e.printStackTrace();
-            return false;
-        } catch (UnknownHostException e) {
             return false;
         }
     }
@@ -97,6 +99,7 @@ public class AddComputerManually extends Activity {
     private void doAddPc(String host) {
         boolean wrongSiteLocal = false;
         boolean success;
+        int portTestResult;
 
         SpinnerDialog dialog = SpinnerDialog.displayDialog(this, getResources().getString(R.string.title_add_pc),
             getResources().getString(R.string.msg_add_pc), false);
@@ -104,12 +107,6 @@ public class AddComputerManually extends Activity {
         try {
             ComputerDetails details = new ComputerDetails();
             details.manualAddress = host;
-
-            try {
-                NvHTTP http = new NvHTTP(host, managerBinder.getUniqueId(), null, PlatformBinding.getCryptoProvider(this));
-                details.serverCert = http.getCertificateIfTrusted();
-            } catch (IOException ignored) {}
-
             success = managerBinder.addComputerBlocking(details);
         } catch (IllegalArgumentException e) {
             // This can be thrown from OkHttp if the host fails to canonicalize to a valid name.
@@ -120,6 +117,14 @@ public class AddComputerManually extends Activity {
         if (!success){
             wrongSiteLocal = isWrongSubnetSiteLocalAddress(host);
         }
+        if (!success && !wrongSiteLocal) {
+            // Run the test before dismissing the spinner because it can take a few seconds.
+            portTestResult = MoonBridge.testClientConnectivity(ServerHelper.CONNECTION_TEST_SERVER, 443,
+                    MoonBridge.ML_PORT_FLAG_TCP_47984 | MoonBridge.ML_PORT_FLAG_TCP_47989);
+        } else {
+            // Don't bother with the test if we succeeded or the IP address was bogus
+            portTestResult = MoonBridge.ML_TEST_RESULT_INCONCLUSIVE;
+        }
 
         dialog.dismiss();
 
@@ -127,7 +132,14 @@ public class AddComputerManually extends Activity {
             Dialog.displayDialog(this, getResources().getString(R.string.conn_error_title), getResources().getString(R.string.addpc_wrong_sitelocal), false);
         }
         else if (!success) {
-            Dialog.displayDialog(this, getResources().getString(R.string.conn_error_title), getResources().getString(R.string.addpc_fail), false);
+            String dialogText;
+            if (portTestResult != MoonBridge.ML_TEST_RESULT_INCONCLUSIVE && portTestResult != 0)  {
+                dialogText = getResources().getString(R.string.nettest_text_blocked);
+            }
+            else {
+                dialogText = getResources().getString(R.string.addpc_fail);
+            }
+            Dialog.displayDialog(this, getResources().getString(R.string.conn_error_title), dialogText, false);
         }
         else {
             AddComputerManually.this.runOnUiThread(new Runnable() {

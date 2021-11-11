@@ -21,7 +21,9 @@ public class XboxOneController extends AbstractXboxController {
             0x0e6f, // Unknown
             0x0f0d, // Hori
             0x1532, // Razer Wildcat
+            0x20d6, // PowerA
             0x24c6, // PowerA
+            0x2e24, // Hyperkin
     };
 
     private static final byte[] FW2015_INIT = {0x05, 0x20, 0x00, 0x01, 0x00};
@@ -101,11 +103,21 @@ public class XboxOneController extends AbstractXboxController {
         switch (buffer.get())
         {
             case 0x20:
+                if (buffer.remaining() < 17) {
+                    LimeLog.severe("XBone button/axis read too small: "+buffer.remaining());
+                    return false;
+                }
+
                 buffer.position(buffer.position()+3);
                 processButtons(buffer);
                 return true;
 
             case 0x07:
+                if (buffer.remaining() < 4) {
+                    LimeLog.severe("XBone mode read too small: "+buffer.remaining());
+                    return false;
+                }
+
                 // The Xbox One S controller needs acks for mode reports otherwise
                 // it retransmits them forever.
                 if (buffer.get() == 0x30) {

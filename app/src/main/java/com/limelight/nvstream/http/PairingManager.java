@@ -14,7 +14,6 @@ import java.security.*;
 import java.security.cert.*;
 import java.util.Arrays;
 import java.util.Locale;
-import java.util.Random;
 
 public class PairingManager {
 
@@ -55,6 +54,10 @@ public class PairingManager {
     
     private static byte[] hexToBytes(String s) {
         int len = s.length();
+        if (len % 2 != 0) {
+            throw new IllegalArgumentException("Illegal string length: "+len);
+        }
+
         byte[] data = new byte[len / 2];
         for (int i = 0; i < len; i += 2) {
             data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
@@ -74,7 +77,7 @@ public class PairingManager {
                 return (X509Certificate)cf.generateCertificate(new ByteArrayInputStream(certBytes));
             } catch (CertificateException e) {
                 e.printStackTrace();
-                return null;
+                throw new RuntimeException(e);
             }
         }
         else {
@@ -168,7 +171,7 @@ public class PairingManager {
     }
     
     public static String generatePinString() {
-        Random r = new Random();
+        SecureRandom r = new SecureRandom();
         return String.format((Locale)null, "%d%d%d%d",
                 r.nextInt(10), r.nextInt(10),
                 r.nextInt(10), r.nextInt(10));
@@ -314,9 +317,8 @@ public class PairingManager {
                 return md.digest(data);
             }
             catch (NoSuchAlgorithmException e) {
-                // Shouldn't ever happen
                 e.printStackTrace();
-                return null;
+                throw new RuntimeException(e);
             }
         }
     }
@@ -332,9 +334,8 @@ public class PairingManager {
                 return md.digest(data);
             }
             catch (NoSuchAlgorithmException e) {
-                // Shouldn't ever happen
                 e.printStackTrace();
-                return null;
+                throw new RuntimeException(e);
             }
         }
     }
