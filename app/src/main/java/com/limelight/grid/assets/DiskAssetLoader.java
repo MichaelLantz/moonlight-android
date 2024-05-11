@@ -28,14 +28,8 @@ public class DiskAssetLoader {
 
     public DiskAssetLoader(Context context) {
         this.cacheDir = context.getCacheDir();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            this.isLowRamDevice =
-                    ((ActivityManager)context.getSystemService(Context.ACTIVITY_SERVICE)).isLowRamDevice();
-        }
-        else {
-            // Use conservative low RAM behavior on very old devices
-            this.isLowRamDevice = true;
-        }
+        this.isLowRamDevice =
+                ((ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE)).isLowRamDevice();
     }
 
     public boolean checkCacheExists(CachedAppAssetLoader.LoaderTuple tuple) {
@@ -154,21 +148,15 @@ public class DiskAssetLoader {
     }
 
     public void populateCacheWithStream(CachedAppAssetLoader.LoaderTuple tuple, InputStream input) {
-        OutputStream out = null;
         boolean success = false;
-        try {
-            out = CacheHelper.openCacheFileForOutput(cacheDir, "boxart", tuple.computer.uuid, tuple.app.getAppId() + ".png");
+        try (final OutputStream out = CacheHelper.openCacheFileForOutput(
+                cacheDir, "boxart", tuple.computer.uuid, tuple.app.getAppId() + ".png")
+        ) {
             CacheHelper.writeInputStreamToOutputStream(input, out, MAX_ASSET_SIZE);
             success = true;
         } catch (IOException e) {
             e.printStackTrace();
         } finally {
-            if (out != null) {
-                try {
-                    out.close();
-                } catch (IOException ignored) {}
-            }
-
             if (!success) {
                 LimeLog.warning("Unable to populate cache with tuple: "+tuple);
                 CacheHelper.deleteCacheFile(cacheDir, "boxart", tuple.computer.uuid, tuple.app.getAppId() + ".png");

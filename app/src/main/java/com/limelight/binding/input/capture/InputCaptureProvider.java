@@ -4,12 +4,15 @@ import android.view.MotionEvent;
 
 public abstract class InputCaptureProvider {
     protected boolean isCapturing;
+    protected boolean isCursorVisible;
 
     public void enableCapture() {
         isCapturing = true;
+        hideCursor();
     }
     public void disableCapture() {
         isCapturing = false;
+        showCursor();
     }
 
     public void destroy() {}
@@ -20,6 +23,14 @@ public abstract class InputCaptureProvider {
 
     public boolean isCapturingActive() {
         return isCapturing;
+    }
+
+    public void showCursor() {
+        isCursorVisible = true;
+    }
+
+    public void hideCursor() {
+        isCursorVisible = false;
     }
 
     public boolean eventHasRelativeMouseAxes(MotionEvent event) {
@@ -33,4 +44,6 @@ public abstract class InputCaptureProvider {
     public float getRelativeAxisY(MotionEvent event) {
         return 0;
     }
+
+    public void onWindowFocusChanged(boolean focusActive) {}
 }

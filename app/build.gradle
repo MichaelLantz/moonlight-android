@@ -1,25 +1,34 @@
 apply plugin: 'com.android.application'
 
 android {
-    ndkVersion "23.0.7599858"
+    ndkVersion "26.2.11394342"
 
-    compileSdkVersion 31
+    compileSdk 34
+
+    namespace 'com.limelight'
 
     defaultConfig {
-        minSdkVersion 21
-        targetSdkVersion 31
+        minSdk 21
+        targetSdk 34
 
-        versionName "9.10.1"
-        versionCode = 271
+        versionName "12.1"
+        versionCode = 314
+
+        // Generate native debug symbols to allow Google Play to symbolicate our native crashes
+        ndk.debugSymbolLevel = 'FULL'
     }
 
-    flavorDimensions "root"
+    flavorDimensions.add("root")
+
+    buildFeatures {
+        buildConfig = true
+    }
 
     productFlavors {
         root {
             // Android O has native mouse capture, so don't show the rooted
             // version to devices running O on the Play Store.
-            maxSdkVersion 25
+            maxSdk 25
 
             externalNativeBuild {
                 ndkBuild {
@@ -29,6 +38,7 @@ android {
 
             applicationId "com.limelight.root"
             dimension "root"
+            buildConfigField "boolean", "ROOT_BUILD", "true"
         }
 
         nonRoot {
@@ -40,12 +50,19 @@ android {
 
             applicationId "com.limelight"
             dimension "root"
+            buildConfigField "boolean", "ROOT_BUILD", "false"
         }
     }
 
-    lintOptions {
+    compileOptions {
+        encoding "UTF-8"
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    lint {
         disable 'MissingTranslation'
-        lintConfig file("lint.xml")
+        lintConfig file('lint.xml')
     }
 
     bundle {
@@ -55,7 +72,7 @@ android {
             enableSplit = false
         }
         density {
-            // FIXME: This should not be neccessary but we get
+            // FIXME: This should not be necessary but we get
             // weird crashes due to missing drawable resources
             // when this split is enabled.
             enableSplit = false
@@ -65,6 +82,8 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix ".debug"
+            resValue "string", "app_label", "Moonlight (Debug)"
+            resValue "string", "app_label_root", "Moonlight (Root Debug)"
 
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
@@ -101,6 +120,8 @@ android {
             //
             // TL;DR: Leave the following line alone!
             applicationIdSuffix ".unofficial"
+            resValue "string", "app_label", "Moonlight"
+            resValue "string", "app_label_root", "Moonlight (Root)"
 
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
@@ -112,17 +133,14 @@ android {
             path "src/main/jni/Android.mk"
         }
     }
-
-    // Generate native debug symbols to allow Google Play to symbolicate our native crashes
-    android.defaultConfig.ndk.debugSymbolLevel = 'FULL'
 }
 
 dependencies {
-    implementation 'org.bouncycastle:bcprov-jdk15on:1.69'
-    implementation 'org.bouncycastle:bcpkix-jdk15on:1.69'
-    implementation 'org.jcodec:jcodec:0.2.3'
-    implementation 'com.squareup.okhttp3:okhttp:3.12.13'
-    implementation 'com.squareup.okio:okio:1.17.5'
-    implementation 'org.jmdns:jmdns:3.5.7'
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.77'
+    implementation 'org.bouncycastle:bcpkix-jdk18on:1.77'
+    implementation 'org.jcodec:jcodec:0.2.5'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'org.jmdns:jmdns:3.5.9'
+    implementation 'com.github.cgutman:ShieldControllerExtensions:1.0.1'
     implementation 'com.vuzix:hud-actionmenu:1.3'
 }

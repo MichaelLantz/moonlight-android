@@ -2,9 +2,12 @@ package com.limelight;
 
 import com.vuzix.hud.actionmenu.ActionMenuActivity;
 import android.graphics.Bitmap;
+import android.os.Build;
 import android.os.Bundle;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 
 import com.limelight.utils.SpinnerDialog;
 
@@ -13,9 +16,25 @@ public class HelpActivity extends ActionMenuActivity {
     private SpinnerDialog loadingDialog;
     private WebView webView;
 
+    private boolean backCallbackRegistered;
+    private OnBackInvokedCallback onBackInvokedCallback;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            onBackInvokedCallback = new OnBackInvokedCallback() {
+                @Override
+                public void onBackInvoked() {
+                    // We should always be able to go back because we unregister our callback
+                    // when we can't go back. Nonetheless, we will still check anyway.
+                    if (webView.canGoBack()) {
+                        webView.goBack();
+                    }
+                }
+            };
+        }
 
         webView = new WebView(this);
         setContentView(webView);
@@ -39,6 +58,8 @@ public class HelpActivity extends ActionMenuActivity {
                             getResources().getString(R.string.help_loading_title),
                             getResources().getString(R.string.help_loading_msg), false);
                 }
+
+                refreshBackDispatchState();
             }
 
             @Override
@@ -47,19 +68,41 @@ public class HelpActivity extends ActionMenuActivity {
                     loadingDialog.dismiss();
                     loadingDialog = null;
                 }
-            }
 
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                return !(url.toUpperCase().startsWith("https://github.com/moonlight-stream/moonlight-docs/wiki/".toUpperCase()) ||
-                        url.toUpperCase().startsWith("http://github.com/moonlight-stream/moonlight-docs/wiki/".toUpperCase()));
+                refreshBackDispatchState();
             }
         });
 
         webView.loadUrl(getIntent().getData().toString());
     }
 
+    private void refreshBackDispatchState() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (webView.canGoBack() && !backCallbackRegistered) {
+                getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                        OnBackInvokedDispatcher.PRIORITY_DEFAULT, onBackInvokedCallback);
+                backCallbackRegistered = true;
+            }
+            else if (!webView.canGoBack() && backCallbackRegistered) {
+                getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(onBackInvokedCallback);
+                backCallbackRegistered = false;
+            }
+        }
+    }
+
     @Override
+    protected void onDestroy() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (backCallbackRegistered) {
+                getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(onBackInvokedCallback);
+            }
+        }
+
+        super.onDestroy();
+    }
+
+    @Override
+    // NOTE: This will NOT be called on Android 13+ with android:enableOnBackInvokedCallback="true"
     public void onBackPressed() {
         // Back goes back through the WebView history
         // until no more history remains

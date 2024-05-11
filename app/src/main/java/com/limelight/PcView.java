@@ -118,11 +118,17 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
     private final static int VIEW_DETAILS_ID = 8;
     private final static int FULL_APP_LIST_ID = 9;
     private final static int TEST_NETWORK_ID = 10;
+    private final static int GAMESTREAM_EOL_ID = 11;
 
     private void initializeViews() {
         setContentView(R.layout.activity_pc_view);
 
         UiHelper.notifyNewRootView(this);
+
+        // Allow floating expanded PiP overlays while browsing PCs
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            setShouldDockBigOverlays(false);
+        }
 
         // Set default preferences if we've never been run
         PreferenceManager.setDefaultValues(this, R.xml.preferences, false);
@@ -254,6 +260,11 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
                                 updateComputer(details);
                             }
                         });
+
+                        // Add a launcher shortcut for this PC (off the main thread to prevent ANRs)
+                        if (details.pairState == PairState.PAIRED) {
+                            shortcutHelper.createAppViewShortcutForOnlineHost(details);
+                        }
                     }
                 }
             });
@@ -324,7 +335,7 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
         ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(menuPosition);
 
         // Add a header with PC status details
-        //menu.clearHeader();
+        menu.clearHeader();
         String headerTitle = computer.details.name + " - ";
         switch (computer.details.state)
         {
@@ -340,20 +351,28 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
                 break;
         }
 
-        //menu.setHeaderTitle(headerTitle);
+       //menu.setHeaderTitle(headerTitle);
 
         // Inflate the context menu
         if (computer.details.state == ComputerDetails.State.OFFLINE ||
             computer.details.state == ComputerDetails.State.UNKNOWN) {
             menu.add(Menu.NONE, WOL_ID, 1, getResources().getString(R.string.pcview_menu_send_wol));
+            menu.add(Menu.NONE, GAMESTREAM_EOL_ID, 2, getResources().getString(R.string.pcview_menu_eol));
         }
         else if (computer.details.pairState != PairState.PAIRED) {
             menu.add(Menu.NONE, PAIR_ID, 1, getResources().getString(R.string.pcview_menu_pair_pc));
+            if (computer.details.nvidiaServer) {
+                menu.add(Menu.NONE, GAMESTREAM_EOL_ID, 2, getResources().getString(R.string.pcview_menu_eol));
+            }
         }
         else {
             if (computer.details.runningGameId != 0) {
                 menu.add(Menu.NONE, RESUME_ID, 1, getResources().getString(R.string.applist_menu_resume));
                 menu.add(Menu.NONE, QUIT_ID, 2, getResources().getString(R.string.applist_menu_quit));
+            }
+
+            if (computer.details.nvidiaServer) {
+                menu.add(Menu.NONE, GAMESTREAM_EOL_ID, 3, getResources().getString(R.string.pcview_menu_eol));
             }
 
             menu.add(Menu.NONE, FULL_APP_LIST_ID, 4, getResources().getString(R.string.pcview_menu_app_list));
@@ -374,13 +393,8 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
     }
 */
     private void doPair(final ComputerDetails computer) {
-        if (computer.state == ComputerDetails.State.OFFLINE ||
-                ServerHelper.getCurrentAddressFromComputer(computer) == null) {
+        if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
             Toast.makeText(PcView.this, getResources().getString(R.string.pair_pc_offline), Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (computer.runningGameId != 0) {
-            Toast.makeText(PcView.this, getResources().getString(R.string.pair_pc_ingame), Toast.LENGTH_LONG).show();
             return;
         }
         if (managerBinder == null) {
@@ -400,8 +414,7 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
                     stopComputerUpdates(true);
 
                     httpConn = new NvHTTP(ServerHelper.getCurrentAddressFromComputer(computer),
-                            managerBinder.getUniqueId(),
-                            computer.serverCert,
+                            computer.httpsPort, managerBinder.getUniqueId(), computer.serverCert,
                             PlatformBinding.getCryptoProvider(PcView.this));
                     if (httpConn.getPairState() == PairState.PAIRED) {
                         // Don't display any toast, but open the app list
@@ -413,16 +426,22 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
 
                         // Spin the dialog off in a thread because it blocks
                         Dialog.displayDialog(PcView.this, getResources().getString(R.string.pair_pairing_title),
-                                getResources().getString(R.string.pair_pairing_msg)+" "+pinStr, false);
+                                getResources().getString(R.string.pair_pairing_msg)+" "+pinStr+"\n\n"+
+                                getResources().getString(R.string.pair_pairing_help), false);
 
                         PairingManager pm = httpConn.getPairingManager();
 
-                        PairState pairState = pm.pair(httpConn.getServerInfo(), pinStr);
+                        PairState pairState = pm.pair(httpConn.getServerInfo(true), pinStr);
                         if (pairState == PairState.PIN_WRONG) {
                             message = getResources().getString(R.string.pair_incorrect_pin);
                         }
                         else if (pairState == PairState.FAILED) {
-                            message = getResources().getString(R.string.pair_fail);
+                            if (computer.runningGameId != 0) {
+                                message = getResources().getString(R.string.pair_pc_ingame);
+                            }
+                            else {
+                                message = getResources().getString(R.string.pair_fail);
+                            }
                         }
                         else if (pairState == PairState.ALREADY_IN_PROGRESS) {
                             message = getResources().getString(R.string.pair_already_in_progress);
@@ -512,8 +531,7 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
     }
 
     private void doUnpair(final ComputerDetails computer) {
-        if (computer.state == ComputerDetails.State.OFFLINE ||
-                ServerHelper.getCurrentAddressFromComputer(computer) == null) {
+        if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
             Toast.makeText(PcView.this, getResources().getString(R.string.error_pc_offline), Toast.LENGTH_SHORT).show();
             return;
         }
@@ -530,8 +548,7 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
                 String message;
                 try {
                     httpConn = new NvHTTP(ServerHelper.getCurrentAddressFromComputer(computer),
-                            managerBinder.getUniqueId(),
-                            computer.serverCert,
+                            computer.httpsPort, managerBinder.getUniqueId(), computer.serverCert,
                             PlatformBinding.getCryptoProvider(PcView.this));
                     if (httpConn.getPairState() == PairingManager.PairState.PAIRED) {
                         httpConn.unpair();
@@ -654,6 +671,10 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
                 ServerHelper.doNetworkTest(PcView.this);
                 return true;
 
+            case GAMESTREAM_EOL_ID:
+                HelpLauncher.launchGameStreamEolFaq(PcView.this);
+                return true;
+
             default:
                 return super.onActionItemSelected(item);
         }
@@ -702,11 +723,6 @@ public class PcView extends ActionMenuActivity implements AdapterFragmentCallbac
                 existingEntry = computer;
                 break;
             }
-        }
-
-        // Add a launcher shortcut for this PC
-        if (details.pairState == PairState.PAIRED) {
-            shortcutHelper.createAppViewShortcutForOnlineHost(details);
         }
 
         if (existingEntry != null) {

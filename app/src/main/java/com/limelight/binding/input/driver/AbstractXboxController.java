@@ -5,9 +5,11 @@ import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
+import android.os.SystemClock;
 
 import com.limelight.LimeLog;
-import com.limelight.binding.video.MediaCodecHelper;
+import com.limelight.nvstream.input.ControllerPacket;
+import com.limelight.nvstream.jni.MoonBridge;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -25,6 +27,14 @@ public abstract class AbstractXboxController extends AbstractController {
         super(deviceId, listener, device.getVendorId(), device.getProductId());
         this.device = device;
         this.connection = connection;
+        this.type = MoonBridge.LI_CTYPE_XBOX;
+        this.capabilities = MoonBridge.LI_CCAP_ANALOG_TRIGGERS | MoonBridge.LI_CCAP_RUMBLE;
+        this.buttonFlags =
+                ControllerPacket.A_FLAG | ControllerPacket.B_FLAG | ControllerPacket.X_FLAG | ControllerPacket.Y_FLAG |
+                        ControllerPacket.UP_FLAG | ControllerPacket.DOWN_FLAG | ControllerPacket.LEFT_FLAG | ControllerPacket.RIGHT_FLAG |
+                        ControllerPacket.LB_FLAG | ControllerPacket.RB_FLAG |
+                        ControllerPacket.LS_CLK_FLAG | ControllerPacket.RS_CLK_FLAG |
+                        ControllerPacket.BACK_FLAG | ControllerPacket.PLAY_FLAG | ControllerPacket.SPECIAL_BUTTON_FLAG;
     }
 
     private Thread createInputThread() {
@@ -37,7 +47,9 @@ public abstract class AbstractXboxController extends AbstractController {
                     // around when we call notifyDeviceAdded(), we won't be able to claim
                     // the controller number used by the original InputDevice.
                     Thread.sleep(1000);
-                } catch (InterruptedException e) {}
+                } catch (InterruptedException e) {
+                    return;
+                }
 
                 // Report that we're added _before_ reporting input
                 notifyDeviceAdded();
@@ -56,7 +68,7 @@ public abstract class AbstractXboxController extends AbstractController {
 
                     do {
                         // Read the next input state packet
-                        long lastMillis = MediaCodecHelper.getMonotonicMillis();
+                        long lastMillis = SystemClock.uptimeMillis();
                         res = connection.bulkTransfer(inEndpt, buffer, buffer.length, 3000);
 
                         // If we get a zero length response, treat it as an error
@@ -64,7 +76,7 @@ public abstract class AbstractXboxController extends AbstractController {
                             res = -1;
                         }
 
-                        if (res == -1 && MediaCodecHelper.getMonotonicMillis() - lastMillis < 1000) {
+                        if (res == -1 && SystemClock.uptimeMillis() - lastMillis < 1000) {
                             LimeLog.warning("Detected device I/O error");
                             AbstractXboxController.this.stop();
                             break;

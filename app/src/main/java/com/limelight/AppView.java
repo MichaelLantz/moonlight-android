@@ -293,6 +293,11 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
 
         setContentView(R.layout.activity_app_view);
 
+        // Allow floating expanded PiP overlays while browsing apps
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            setShouldDockBigOverlays(false);
+        }
+
         UiHelper.notifyNewRootView(this);
 
         showHiddenApps = getIntent().getBooleanExtra(SHOW_HIDDEN_APPS_EXTRA, false);
@@ -387,7 +392,10 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
     public boolean onCreateActionMenu(Menu menu) {
         super.onCreateActionMenu(menu);
 
+        AdapterContextMenuInfo info = (AdapterContextMenuInfo) menuInfo;
         AppObject selectedApp = (AppObject) appGridAdapter.getItem(menuPosition);
+
+        menu.setHeaderTitle(selectedApp.app.getAppName());
 
         if (lastRunningAppId != 0) {
             if (lastRunningAppId == selectedApp.app.getAppId()) {
@@ -411,7 +419,7 @@ public class AppView extends ActionMenuActivity implements AdapterFragmentCallba
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             // Only add an option to create shortcut if box art is loaded
             // and when we're in grid-mode (not list-mode).
-            ImageView appImageView = null; //info.targetView.findViewById(R.id.grid_image);
+           ImageView appImageView = null; //info.targetView.findViewById(R.id.grid_image);
             if (appImageView != null) {
                 // We have a grid ImageView, so we must be in grid-mode
                 BitmapDrawable drawable = (BitmapDrawable)appImageView.getDrawable();
